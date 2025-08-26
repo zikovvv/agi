@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+import sys
 from typing import Dict, Optional, Tuple
 
 import numpy as np
@@ -21,7 +22,7 @@ import engine as e  # <- make sure the filename matches
 from torch.functional import F
 
 from model import SudokuTransformer, SudokuTransformerConfig
-
+from common import *
 
 # ============================================================
 # Config
@@ -29,7 +30,8 @@ from model import SudokuTransformer, SudokuTransformerConfig
 
 @dataclass
 class DatasetConfig:
-    n_missing: int = 40       # exactly this many blanks per puzzle
+    n_missing: int = 25
+    n_missing_max: Optional[int] = 40
     num_samples: int = 600    # dataset size
     seed: int = 123
     val_frac: float = 0.1
@@ -66,29 +68,6 @@ class SudokuTorchDataset(Dataset):
         return self.puzzles[idx], self.solutions[idx]
 
 # ============================================================
-# Model: small CNN baseline producing 9 logits per cell
-# (You can swap this with your own MLP/Transformer/CNN that maps (B,9,9,9)->(B,9,9,9) logits.)
-# Conv2d uses NCHW: (batch, channels, height, width).
-# ============================================================
-
-class SudokuCNN(nn.Module):
-    def __init__(self, channels: int = 9):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Conv2d(channels, 64, 3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(64, 128, 3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(128, 128, 3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(128, channels, 1)  # logits over 9 classes per cell
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)  # (B,9,9,9) logits
-
-
-# ============================================================
 # Train / Eval
 # ============================================================
 
@@ -99,110 +78,157 @@ OUTPUT_VOCAB = [i for i in range(1, 9 + 1)] # 1 - 9 numbers, total of 9 entries
 
 def train_one_epoch(model: nn.Module,
                     loader: DataLoader,
-                    # loss_fn: nn.Module,
                     optimizer: torch.optim.Optimizer,
                     device: str = "cpu") -> Dict[str, float]:
     model.train()
-    loss_fn = nn.CrossEntropyLoss()
-    total_loss = 0.0
+    # loss_fn = nn.CrossEntropyLoss()
+    total_comb_loss = 0.0
+    total_cls_loss = 0.0
+    total_certainty_loss = 0.0
     correct = 0
-    correct_new = 0
-    total_new = 0
+    # correct_new = 0
+    # total_new = 0
     total = 0
 
     for x, t in loader:
         # x.size = (B, 9, 9)
         # t.size = (B, 9, 9)
         x : torch.Tensor = x.to(device)
-        t : torch.Tensor = t.to(device)
-        # t_onehot : torch.Tensor = F.one_hot(t.to(device).long() - 1, num_classes=9)#.permute(0, 3, 1, 2)
-        # print(x.size(), t.size(), t_onehot.size())
-        # for B in range(len(x)) :
-        #     for X in range(9) : 
-        #         for Y in range(9) :
-        #             if t_onehot[B, X, Y].sum() != 1:
-        #                 print(f"Empty cell found at ({X}, {Y})")
-        #             n = t_onehot[B, X, Y].argmax() + 1
-        #             assert n == t[B, X, Y].item(), f"Expected {t[B, X, Y].item()} but got {n} at ({X}, {Y})"
-
-        # exit()
-        
+        t : torch.Tensor = t.to(device)        
         x_flat : torch.Tensor = x.view(x.size(0), -1).long() # (B, 81)
         t_flat : torch.Tensor = t.view(t.size(0), -1).long() # (B, 81)
         t_onehot_flat : torch.Tensor = F.one_hot(t_flat.to(device).long() - 1, num_classes=9).to(torch.float32) # (B, 81, 9) 
-        # print(x_flat.size(), t_flat.size(), t_onehot_flat.size())
 
         optimizer.zero_grad(set_to_none=True)
-        logits : torch.Tensor = model(x_flat)
+        logits, certainty_logits = model(x_flat)
+        logits : torch.Tensor
+        certainty_logits : torch.Tensor
+        log_debug(f'{logits.shape=}, {certainty_logits.shape=}')
 
-        loss = loss_fn(logits, t_onehot_flat)
-        pred = logits.argmax(dim=-1) + 1 # sudoku is from 1 to 9
-        # print(logits.size(), pred.size(), t_flat.size())
-        correct += (pred == t_flat).sum().item()
-        total += t_flat.numel()
+
+        visible_cells = (x_flat != 0).to(torch.float32)
+        large_neg = -1e6
+        mask = visible_cells * large_neg
+        certainty_logits += mask
+        most_certain_idx = certainty_logits.argmax(dim=-1)
+        log_debug(f'{most_certain_idx.shape=}, {most_certain_idx=}')
         
-        # only check fields that are 0 in x_flat
-        correct_new += ((x_flat == 0) * (pred == t_flat)).sum().item()
-        total_new += (x_flat == 0).sum().item()
-
-        loss.backward()
+        
+        row_idx = torch.arange(x.shape[0], device=logits.device)
+        cls_logits_chosen = logits[row_idx, most_certain_idx]            # (B, 9)
+        cls_onehot_chosen = t_onehot_flat[row_idx, most_certain_idx]       # (B,)
+        log_debug(f'{cls_logits_chosen.shape=}, {cls_logits_chosen=}')
+        log_debug(f'{cls_onehot_chosen.shape=}, {cls_onehot_chosen=}')
+        cls_chosen_pred = cls_logits_chosen.argmax(dim=-1) + 1
+        log_debug(f'{cls_chosen_pred.shape=}, {cls_chosen_pred=}')
+        cls_chosen_truth = cls_onehot_chosen.argmax(dim=-1) + 1
+        log_debug(f'{cls_chosen_truth.shape=}, {cls_chosen_truth=}')
+        loss_cls_logits_chosen = nn.CrossEntropyLoss()(cls_logits_chosen, cls_onehot_chosen)
+        log_debug(f'{loss_cls_logits_chosen.shape=}, {loss_cls_logits_chosen=}')
+        certainty_result = (cls_chosen_pred == cls_chosen_truth).to(torch.float32)
+        log_debug(f'{certainty_result.shape=}, {certainty_result=}')
+        certainty_loss = nn.BCEWithLogitsLoss()(certainty_logits[row_idx, most_certain_idx], certainty_result)
+        log_debug(f'{certainty_loss.shape=}, {certainty_loss=}')
+        combined_loss = loss_cls_logits_chosen + certainty_loss
+        log_debug(f'{combined_loss.shape=}, {combined_loss=}')
+        
+        combined_loss.backward()
         optimizer.step()
 
-        total_loss += loss.item() * x.size(0)
+        total_comb_loss += combined_loss.item() * x.size(0)
+        total_cls_loss += loss_cls_logits_chosen.item() * x.size(0)
+        total_certainty_loss += certainty_loss.item() * x.size(0)
 
-    avg_loss = total_loss / len(loader.dataset)
+
+        correct += (cls_chosen_pred == cls_chosen_truth).sum().item()
+
+        total += x.shape[0]
+
+
+
+    avg_comb_loss = total_comb_loss / len(loader.dataset)
+    avg_cls_loss = total_cls_loss / len(loader.dataset)
+    avg_certainty_loss = total_certainty_loss / len(loader.dataset)
     acc = correct / max(total, 1)
-    acc_new = correct_new / max(total_new, 1)
-    return {"loss": avg_loss, "acc": acc, "acc_new": acc_new}
 
+    return {"comb_loss": avg_comb_loss, "cls_loss": avg_cls_loss, "certainty_loss": avg_certainty_loss, "acc": acc}
 
 @torch.no_grad()
 def evaluate(model: nn.Module,
              loader: DataLoader,
              device: str = "cpu") -> Dict[str, float]:
     model.eval()
-    total_loss = 0.0
+    # loss_fn = nn.CrossEntropyLoss()
+    total_comb_loss = 0.0
+    total_cls_loss = 0.0
+    total_certainty_loss = 0.0
     correct = 0
+    # correct_new = 0
+    # total_new = 0
     total = 0
-    full_grid_correct = 0
-    n_batches = 0
-    correct_new = 0
-    total_new = 0
 
-    loss_fn = nn.CrossEntropyLoss()
     for x, t in loader:
+        # x.size = (B, 9, 9)
+        # t.size = (B, 9, 9)
         x : torch.Tensor = x.to(device)
-        t : torch.Tensor = t.to(device)
+        t : torch.Tensor = t.to(device)        
         x_flat : torch.Tensor = x.view(x.size(0), -1).long() # (B, 81)
         t_flat : torch.Tensor = t.view(t.size(0), -1).long() # (B, 81)
         t_onehot_flat : torch.Tensor = F.one_hot(t_flat.to(device).long() - 1, num_classes=9).to(torch.float32) # (B, 81, 9) 
 
+        # optimizer.zero_grad(set_to_none=True)
+        logits, certainty_logits = model(x_flat)
+        logits : torch.Tensor
+        certainty_logits : torch.Tensor
+        log_debug(f'{logits.shape=}, {certainty_logits.shape=}')
 
-        with torch.no_grad():
-            logits : torch.Tensor = model(x_flat)
 
-
-        loss = loss_fn(logits, t_onehot_flat)
-        pred = logits.argmax(dim=-1) + 1 # sudoku is from 1 to 9
-        correct += (pred == t_flat).sum().item()
-        total += t_flat.numel()
-
-        full_grid_correct += (pred == t_flat).flatten().sum().item() == 81
-
-        total_loss += loss.item() * x.size(0)
-        n_batches += 1
+        visible_cells = (x_flat != 0).to(torch.float32)
+        large_neg = -1e6
+        mask = visible_cells * large_neg
+        certainty_logits += mask
+        most_certain_idx = certainty_logits.argmax(dim=-1)
+        log_debug(f'{most_certain_idx.shape=}, {most_certain_idx=}')
         
-        correct_new += ((x_flat == 0) * (pred == t_flat)).sum().item()
-        total_new += (x_flat == 0).sum().item()
+        
+        row_idx = torch.arange(x.shape[0], device=logits.device)
+        cls_logits_chosen = logits[row_idx, most_certain_idx]            # (B, 9)
+        cls_onehot_chosen = t_onehot_flat[row_idx, most_certain_idx]       # (B,)
+        log_debug(f'{cls_logits_chosen.shape=}, {cls_logits_chosen=}')
+        log_debug(f'{cls_onehot_chosen.shape=}, {cls_onehot_chosen=}')
+        cls_chosen_pred = cls_logits_chosen.argmax(dim=-1) + 1
+        log_debug(f'{cls_chosen_pred.shape=}, {cls_chosen_pred=}')
+        cls_chosen_truth = cls_onehot_chosen.argmax(dim=-1) + 1
+        log_debug(f'{cls_chosen_truth.shape=}, {cls_chosen_truth=}')
+        loss_cls_logits_chosen = nn.CrossEntropyLoss()(cls_logits_chosen, cls_onehot_chosen)
+        log_debug(f'{loss_cls_logits_chosen.shape=}, {loss_cls_logits_chosen=}')
+        certainty_result = (cls_chosen_pred == cls_chosen_truth).to(torch.float32)
+        log_debug(f'{certainty_result.shape=}, {certainty_result=}')
+        certainty_loss = nn.BCEWithLogitsLoss()(certainty_logits[row_idx, most_certain_idx], certainty_result)
+        log_debug(f'{certainty_loss.shape=}, {certainty_loss=}')
+        combined_loss = loss_cls_logits_chosen + certainty_loss
+        log_debug(f'{combined_loss.shape=}, {combined_loss=}')
+        
+        # combined_loss.backward()
+        # optimizer.step()
+
+        total_comb_loss += combined_loss.item() * x.size(0)
+        total_cls_loss += loss_cls_logits_chosen.item() * x.size(0)
+        total_certainty_loss += certainty_loss.item() * x.size(0)
 
 
-    avg_loss = total_loss / len(loader.dataset)
-    token_acc = correct / max(total, 1)
-    grid_acc = full_grid_correct / (len(loader.dataset))
-    acc_new = correct_new / max(total_new, 1)
+        correct += (cls_chosen_pred == cls_chosen_truth).sum().item()
 
-    return {"loss": avg_loss, "token_acc": token_acc, "grid_acc": grid_acc, "acc_new": acc_new}
+        total += x.shape[0]
 
+
+
+    avg_comb_loss = total_comb_loss / len(loader.dataset)
+    avg_cls_loss = total_cls_loss / len(loader.dataset)
+    avg_certainty_loss = total_certainty_loss / len(loader.dataset)
+    acc = correct / max(total, 1)
+
+    return {"comb_loss": avg_comb_loss, "cls_loss": avg_cls_loss, "certainty_loss": avg_certainty_loss, "acc": acc}
 
 # ============================================================
 # Main
@@ -220,8 +246,8 @@ def main(
 
     
     print("Generating Sudoku dataset...")
-    ds = e.generate_dataset(dcfg.num_samples, dcfg.n_missing, seed=dcfg.seed)
-    
+    ds = e.generate_dataset(dcfg.num_samples, dcfg.n_missing, dcfg.n_missing_max, seed=dcfg.seed)
+
     print(ds.puzzles.shape, ds.solutions.shape)
 
     # 2) Wrap into Torch Dataset
@@ -255,17 +281,26 @@ def main(
     best_val = math.inf
     for epoch in range(1, tcfg.epochs + 1):
         tr = train_one_epoch(model, train_loader, optimizer, device=tcfg.device)
-        va = evaluate(model, val_loader, device=tcfg.device)
-
-        print(f"Epoch {epoch:02d} | train loss {tr['loss']:.4f} acc {tr['acc']:.4f} acc_new {tr['acc_new']:.4f} "
-              f"| val loss {va['loss']:.4f} token_acc {va['token_acc']:.4f} grid_acc {va['grid_acc']:.4f} acc_new {va['acc_new']:.4f}")
-
+        l  = f"Epoch {epoch:02d} | "
+        for k, v in tr.items() : 
+            l += f"{k} {v:.4f} | "
+        print(f"{l}")
+        
+        l  = f"Epoch {epoch:02d} | "
+        with torch.no_grad():
+            va = evaluate(model, val_loader, device=tcfg.device)
+        for k, v in va.items() : 
+            l += f"{k} {v:.4f} | "
+        print(f"{l}")
 
     print("Done.")
 
 
 if __name__ == "__main__":
-    dcfg = DatasetConfig(n_missing=40, num_samples=600, seed=123, val_frac=0.1, test_frac=0.0)
+    logger.remove() #remove the old handler. Else, the old one will work along with the new one you've added below'
+    logger.add(sys.stderr, level="INFO") 
+    
+    dcfg = DatasetConfig(n_missing=25, num_samples=600, seed=123, val_frac=0.1, test_frac=0.0, n_missing_max=40)
     tcfg = TrainConfig(batch_size=16, lr=3e-4)
     mcfg = SudokuTransformerConfig(
         d_model=256, nhead=8, num_layers=8, dim_feedforward=1024,

@@ -1,6 +1,6 @@
 import math
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -15,8 +15,6 @@ class SudokuTransformerConfig:
     num_layers: int = 6
     dim_feedforward: int = 1024
     dropout: float = 0.1
-    use_structural_embeddings: bool = True   # add row/col/box embeddings to token+pos
-    structural_attention_bias: float = 0.0   # >0 to softly bias attn to row/col/box neighbors
     norm_first: bool = True
     layer_norm_eps: float = 1e-5
     max_positions: int = 81                 # 9x9 Sudoku
@@ -69,13 +67,17 @@ class SudokuTransformer(nn.Module):
 
         # --- LM Head (token classification head) ---
         self.lm_head = nn.Linear(d, cfg.num_classes)
-        
+        self.confidence_head = nn.Sequential(
+            nn.Linear(d, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1),
+            # nn.Sigmoid()
+        )
+
     def forward(
         self,
         input_ids: torch.LongTensor,          # (B, 81), tokens 0..10
-        *,
-        return_hidden: bool = False
-    ):
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         assert input_ids.dim() == 2 and input_ids.size(1) == self.cfg.max_positions, \
             f"expected (B, {self.cfg.max_positions}), got {tuple(input_ids.shape)}"
 
@@ -100,33 +102,12 @@ class SudokuTransformer(nn.Module):
                         src_key_padding_mask=None,
                         is_causal=False
                     )  # (B, S, D)
-
-        # assert there is no grad on anything
-        # assert not hidden.requires_grad
-        # if x.requires_grad:
-        #     print(x.grad)
-        # exit()
         hidden = self.encoder(hidden + x, src_key_padding_mask=None, is_causal=False)  # (B, S, D)
 
-        
-        
-        
         # --- Project to per-cell 9-class logits ---
-        logits = self.lm_head(hidden)                                 # (B, S, 9)
-        if return_hidden:
-            return logits, hidden
-        return logits
-
-    # @staticmethod
-    # def labels_from_digits(digits: torch.LongTensor) -> torch.LongTensor:
-    #     """
-    #     Convert Sudoku digits in [0..9] (0 = empty) to target labels in [-100, 0..8],
-    #     where -100 will be ignored by CrossEntropyLoss(ignore_index=-100).
-    #     """
-    #     assert digits.dim() == 2, "expected (B, 81)"
-    #     labels = digits.clone() - 1
-    #     labels[digits == 0] = -100   # ignore empty cells in loss by default
-    #     return labels
+        token_logits = self.lm_head(hidden)                                 # (B, S, 9)
+        confidence_logits = self.confidence_head(hidden).squeeze(-1)        # (B, S,)
+        return token_logits, confidence_logits
 
 
 # ----------------
@@ -135,8 +116,6 @@ class SudokuTransformer(nn.Module):
 if __name__ == "__main__":
     cfg = SudokuTransformerConfig(
         d_model=256, nhead=8, num_layers=6, dim_feedforward=1024,
-        use_structural_embeddings=True,
-        structural_attention_bias=1.0  # set 0.0 to disable; learnable thereafter
     )
     model = SudokuTransformer(cfg)
 

@@ -141,6 +141,7 @@ class SudokuDataset:
 
 def generate_dataset(n_samples: int,
                      n_missing: int,
+                     n_missing_max : Optional[int] = None,
                      seed: Optional[int] = None) -> SudokuDataset:
     """
     Generate a dataset of size N with exactly n_missing blanks per puzzle.
@@ -164,7 +165,10 @@ def generate_dataset(n_samples: int,
     for i in range(n_samples):
         # Derive a per-sample seed for reproducibility with a single master seed
         sample_seed = int(rng.integers(0, 2**63 - 1))
-        s = new_sample(n_missing, seed=sample_seed)
+        nmis = n_missing
+        if n_missing_max is not None and n_missing_max > n_missing:
+            nmis = rng.integers(n_missing, n_missing_max + 1)
+        s = new_sample(nmis, seed=sample_seed)
         puzzles[i] = s.puzzle
         solutions[i] = s.solution
         # x_onehot[i] = s.x_onehot
@@ -201,3 +205,27 @@ if __name__ == "__main__":
     k = 3
     print("\nPuzzle (zeros = blanks):\n", ds.puzzles[k])
     print("\nSolution:\n", ds.solutions[k])
+
+    nb_missing_each = []
+    for i in range(N):
+        nb_missing = int((ds.puzzles[i] == 0).sum())
+        nb_missing_each.append(nb_missing)
+    
+    nb_missing_min, nb_missing_max = min(nb_missing_each), max(nb_missing_each)
+    assert nb_missing_min == nb_missing_max == MISSING
+    
+
+
+    ds_random_missing = generate_dataset(N, MISSING, MISSING + 10, seed=123)
+
+    nb_missing_each = []
+    for i in range(N):
+        nb_missing = int((ds_random_missing.puzzles[i] == 0).sum())
+        nb_missing_each.append(nb_missing)
+
+    nb_missing_min, nb_missing_max = min(nb_missing_each), max(nb_missing_each)
+    assert nb_missing_min >= MISSING
+    assert nb_missing_max <= MISSING + 10
+    print(f"\nWith random missing in [{MISSING}, {MISSING + 10}]: min={nb_missing_min}, max={nb_missing_max}")
+    
+
