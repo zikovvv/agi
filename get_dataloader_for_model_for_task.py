@@ -4,7 +4,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 from gen_simple_ds import gen_simple_ds_denoising_1, gen_simple_ds_fill_simple_shape
-from get_ds_for_task import get_ds_for_masked_modeling_only_answer
+from get_ds_for_task import get_ds_for_masked_modeling_only_answer, get_ds_for_masked_modeling_only_answer_only_foreground_items
 
 class SimpleDataset(Dataset):
     def __init__(self, data):
@@ -233,7 +233,7 @@ def ex1 ():
     masked_token_id = 15
     newline_token_id = 12
     pad_token_id = 18
-    raw_ds = get_ds_for_masked_modeling_only_answer(
+    raw_ds = get_ds_for_masked_modeling_only_answer_only_foreground_items(
         gen_simple_ds_fill_simple_shape(100),
         0.15,
         masked_token_id
@@ -257,13 +257,13 @@ def ex1 ():
         split_ratio = 0.8,
         batch_size_train = 4,
         batch_size_eval = 4,
-        device = "cuda"# if torch.cuda.is_available() else "cpu"
+        device = "cpu"# if torch.cuda.is_available() else "cpu"
     )
-    # for batch in val_dl : 
-    #     print(batch)
-    #     assert len(batch[next(iter(batch.keys()))]) == 4
-    #     plot_batch_data(batch)
-    #     returns
+    for batch in val_dl : 
+        print(batch)
+        assert len(batch[next(iter(batch.keys()))]) == 4
+        plot_batch_data(batch)
+        return
 
 
 if __name__ == "__main__":

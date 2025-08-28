@@ -2,7 +2,7 @@ import json
 import tqdm
 from gen_simple_ds import gen_simple_ds_fill_simple_shape
 from get_dataloader_for_model_for_task import get_dataloaders_for_encoder_masked_modeling
-from get_ds_for_task import get_ds_for_masked_modeling_only_answer
+from get_ds_for_task import get_ds_for_masked_modeling_only_answer, get_ds_for_masked_modeling_only_answer_only_foreground_items
 from model import *
 import math
 from dataclasses import dataclass
@@ -219,7 +219,7 @@ def main(
     model = _get_model(mcfg, tcfg)
     optimizer = _get_optimizer(model, tcfg)
     
-    raw_ds = get_ds_for_masked_modeling_only_answer(
+    raw_ds = get_ds_for_masked_modeling_only_answer_only_foreground_items(
         gen_simple_ds_fill_simple_shape(dcfg.num_samples),
         dcfg.percentage_masked,
         mcfg.masked_token_id
