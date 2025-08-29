@@ -223,11 +223,12 @@ class ARCEncoderForMaskedSequenceModelling(nn.Module):
         super().__init__()
         self.cfg = cfg
         self.encoder = ARCEncoderModel(cfg)
+        self.lm_head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=True)
 
-        self.lm_head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
-        if cfg.tie_word_embeddings:
-            self.lm_head.weight = self.encoder.token_embed.weight  # tie
-        self.lm_bias = nn.Parameter(torch.zeros(cfg.vocab_size))
+        # self.lm_head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
+        # if cfg.tie_word_embeddings:
+        #     self.lm_head.weight = self.encoder.token_embed.weight  # tie
+        # self.lm_bias = nn.Parameter(torch.zeros(cfg.vocab_size))
 
     def forward(
         self,

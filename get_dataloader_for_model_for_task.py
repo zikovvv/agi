@@ -1,9 +1,10 @@
-from typing import Dict, List, Tuple
+from typing import Dict, List, Set, Tuple
+from matplotlib import pyplot as plt
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from gen_simple_ds import gen_simple_ds_denoising_1, gen_simple_ds_fill_simple_shape
+from gen_simple_ds import gen_examples, PuzzleNames
 from get_ds_for_task import get_ds_for_masked_modeling_only_answer, get_ds_for_masked_modeling_only_answer_only_foreground_items
 
 class SimpleDataset(Dataset):
@@ -172,8 +173,6 @@ def get_dataloaders_for_encoder_masked_modeling(
     
     return train_dataloader, val_dataloader
 
-
-
 def ex1 ():
     def plot_batch_data(batch : Dict[str, torch.Tensor]) :
         import matplotlib.pyplot as plt
@@ -234,7 +233,12 @@ def ex1 ():
     newline_token_id = 12
     pad_token_id = 18
     raw_ds = get_ds_for_masked_modeling_only_answer_only_foreground_items(
-        gen_simple_ds_fill_simple_shape(100),
+        gen_examples(
+            name = PuzzleNames.FIll_SIMPLE_OPENED_SHAPE,
+            nb_examples = 100,
+            augment_colors = False,
+            do_shuffle = False
+        ),
         0.15,
         masked_token_id
     )
@@ -266,5 +270,207 @@ def ex1 ():
         return
 
 
+def get_dataloaders_for_cnn_masked_modeling(
+    ds_raw : List[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]],
+    masked_token_id : int,
+    ignore_label_id : int,
+    newline_token_id : int,
+    max_grid_width : int,
+    max_grid_height : int,
+    pad_token_id : int,
+    split_ratio : float,
+    batch_size_train : int,
+    batch_size_eval : int,
+    only_answer : bool,
+    device : str
+) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
+
+
+    def sample_as_input_output_pair(q : torch.Tensor, a : torch.Tensor, l : torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor] :
+        if only_answer :
+            l_copy = l.clone()
+            l_mask = a != masked_token_id
+            l_copy[l_mask] = ignore_label_id
+            return a, l_copy
+        
+        else :
+            raise NotImplementedError()
+            # stick both question and answer together into onr grid and they have t be separated by 
+            # newline token and whoever is smaller has to be padded with pad token
+            # Pad both grids to max dimensions
+            q_padded = np.full((max_grid_height, max_grid_width), pad_token_type_id, dtype=q.dtype)
+            a_padded = np.full((max_grid_height, max_grid_width), pad_token_type_id, dtype=a.dtype)
+
+            # Copy original grids into padded versions
+            q_h, q_w = q.shape
+            a_h, a_w = a.shape
+            q_padded[:q_h, :q_w] = q
+            a_padded[:a_h, :a_w] = a
+
+            # Create combined grid with question on top, newline separator, then answer
+            combined_height = max_grid_height + 1 + max_grid_height  # q + newline + a
+            combined_grid = np.full((combined_height, max_grid_width), pad_token_type_id, dtype=q.dtype)
+
+            # Place question in top part
+            combined_grid[:max_grid_height, :] = q_padded
+
+            # Add newline separator row
+            combined_grid[max_grid_height, :] = newline_token_id
+
+            # Place answer in bottom part
+            combined_grid[max_grid_height + 1:, :] = a_padded
+
+            # Convert to tensors
+            input_tensor = torch.tensor(combined_grid, dtype=torch.long)
+            label_tensor = torch.tensor(l, dtype=torch.long)
+            return input_tensor, label_tensor
+
+    def get_as_input_and_labels_pairs() -> List[Tuple[torch.Tensor, torch.Tensor]] :
+        res = []
+        for (q, a), l in ds_raw :
+            res.append(sample_as_input_output_pair(
+                torch.tensor(q, dtype=torch.long),
+                torch.tensor(a, dtype=torch.long),
+                torch.tensor(l, dtype=torch.long)
+            ))
+        return res
+    
+    def collate_fn(
+        batch : List[Tuple[torch.Tensor, torch.Tensor]],
+    ) -> Dict[str, torch.Tensor] :
+        B = len(batch)
+
+        max_h = max(x[0].shape[0] for x in batch)
+        max_w = max(x[0].shape[1] for x in batch)
+        input_ids_base : torch.Tensor = torch.full((B, max_h, max_w), pad_token_id, dtype=torch.long)
+        labels_base = torch.full((B, max_h, max_w), ignore_label_id, dtype=torch.long) # padding labels and ignore labels is literally the same because loss function will treat them equally
+
+        for i, (token_ids, labels) in enumerate(batch):
+            h, w = token_ids.shape
+            input_ids_base[i, :h, :w] = token_ids
+            labels_base[i, :h, :w] = labels
+
+        return {
+            "input_ids": input_ids_base.to(device),
+            "labels": labels_base.to(device)
+        }
+
+    ds_torch = get_as_input_and_labels_pairs()
+
+    dataset = SimpleDataset(ds_torch)
+
+    # Create train/validation split
+    train_size = int(split_ratio * len(dataset))
+    val_size = len(dataset) - train_size
+    train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
+
+    # Create dataloaders with custom collate function
+    train_dataloader = DataLoader(
+        train_dataset,
+        batch_size=batch_size_train,
+        shuffle=True,
+        collate_fn=collate_fn
+    )
+
+    val_dataloader = DataLoader(
+        val_dataset,
+        batch_size=batch_size_eval,
+        shuffle=False,
+        collate_fn=collate_fn
+    )
+
+    return train_dataloader, val_dataloader
+
+def ex2() :
+    def plot_batch_data(
+        batch : Dict[str, torch.Tensor]
+    ) -> None:
+        input_ids = batch["input_ids"]
+        labels = batch["labels"]
+        B, H, W = input_ids.shape
+        MAX_COLOR = 30
+        # input_ids (B, H, W)
+        fig, axs = plt.subplots(2, B, figsize=(6, 12))
+        for i in range(B):
+            axs[0, i].imshow(input_ids[i], cmap='tab20', vmin=0, vmax=MAX_COLOR)
+            axs[0, i].set_title(f'Input ids')
+
+            axs[1, i].imshow(labels[i], cmap='tab20', vmin=0, vmax=MAX_COLOR)
+            axs[1, i].set_title(f'Actual labels')
+
+        plt.show()
+    
+    masked_token_id = 15
+    newline_token_id = 12
+    pad_token_id = 18
+    raw_ds = get_ds_for_masked_modeling_only_answer_only_foreground_items(
+        gen_examples(
+            name = PuzzleNames.FIll_SIMPLE_OPENED_SHAPE,
+            nb_examples = 2000,
+            augment_colors = True,
+            do_shuffle = False
+        ),
+        0.2,
+        masked_token_id
+    )
+    
+    
+    
+    # _l = raw_ds[0][1]
+    # print(_l)
+    # assert (_l != masked_token_id).sum() > 0
+    train_dl, val_dl = get_dataloaders_for_cnn_masked_modeling(
+        raw_ds,
+        masked_token_id = masked_token_id,
+        ignore_label_id = -100,
+        newline_token_id = newline_token_id,
+        max_grid_width = 40,
+        max_grid_height = 40,
+        pad_token_id = pad_token_id,
+        split_ratio = 0.8,
+        batch_size_train = 4,
+        batch_size_eval = 4,
+        only_answer=True,
+        device = "cpu"# if torch.cuda.is_available() else "cpu"
+    )
+    
+    
+    background_colors_labels = []
+    background_colors_input_ids = []
+    
+    for b in train_dl:
+        input_ids, labels = b["input_ids"], b["labels"]
+        for inp, l in zip(input_ids, labels):
+            most_cmmon_color_inp : int = int(torch.bincount(inp[inp != pad_token_id]).argmax().item())
+            try : 
+                most_cmmon_color_label : int = int(torch.bincount(l[l != -100]).argmax().item())
+            except BaseException :
+                print('DADKASJDLKAS')
+                # unique_colors_inp :Set[int] = set(int(x.item()) for x in inp.flatten() if x.item() != pad_token_id)
+                
+            background_colors_input_ids.append(most_cmmon_color_inp)
+            background_colors_labels.append(most_cmmon_color_label)
+
+    labels_histogram = torch.bincount(torch.tensor(background_colors_labels))
+    input_ids_histogram = torch.bincount(torch.tensor(background_colors_input_ids))
+    fig, axs = plt.subplots(1, 2, figsize=(15, 5))
+    axs[0].bar(range(len(labels_histogram)), labels_histogram.numpy(), color='blue')
+    axs[0].set_title('Background Colors - Labels')
+    axs[1].bar(range(len(input_ids_histogram)), input_ids_histogram.numpy(), color='orange')
+    axs[1].set_title('Background Colors - Input IDs')
+    plt.show()
+
+    for batch in val_dl : 
+        print(batch)
+        assert len(batch[next(iter(batch.keys()))]) == 4
+        plot_batch_data(batch)
+        return
+
+
+
+
+
 if __name__ == "__main__":
-    ex1()  
+    # ex1()  
+    ex2()  
+    
