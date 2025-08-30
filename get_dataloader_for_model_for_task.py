@@ -4,8 +4,8 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from gen_simple_ds import gen_examples, PuzzleNames
-from get_ds_for_task import get_ds_for_masked_modeling_only_answer, get_ds_for_masked_modeling_only_answer_only_foreground_items
+from gen_simple_arc_ds import gen_examples, PuzzleNames
+from get_ds_for_task import get_ds_for_simple_input_output_flat_seuqences, get_ds_for_masked_modeling_only_answer, get_ds_for_masked_modeling_only_answer_only_foreground_items
 
 class SimpleDataset(Dataset):
     def __init__(self, data):
@@ -460,7 +460,122 @@ def ex2() :
 
 
 
+
+def get_dataloaders_for_flat_seq_cls(
+    ds_raw : List[Tuple[np.ndarray, np.ndarray]],
+    masked_token_id : int,
+    ignore_label_id : int,
+    sep_token_id : int,
+    pad_token_id : int,
+    split_ratio : float,
+    batch_size_train : int,
+    batch_size_eval : int,
+    device : str
+) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
+    def get_as_input_and_labels_pairs() -> List[Tuple[torch.Tensor, torch.Tensor]]:
+        res = []
+        for input_seq, output_seq in ds_raw:
+            # print(input_seq, output_seq)
+            input_tensor = torch.tensor(input_seq, dtype=torch.long)
+            output_tensor = torch.tensor(output_seq, dtype=torch.long)
+            
+            # Create sequence: input + sep + masked_tokens
+            total_len = input_tensor.shape[0] + 1 + output_tensor.shape[0]
+            input_ids = torch.full((total_len,), pad_token_id, dtype=torch.long)
+            labels = torch.full((total_len,), ignore_label_id, dtype=torch.long)
+            
+            # Fill input part
+            input_ids[:input_tensor.shape[0]] = input_tensor
+            # Add separator
+            input_ids[input_tensor.shape[0]] = sep_token_id
+            # Fill masked tokens for output part
+            input_ids[input_tensor.shape[0] + 1:] = masked_token_id
+            # Set labels for output part only
+            labels[input_tensor.shape[0] + 1:] = output_tensor
+            
+            res.append((input_ids, labels))
+        return res
+
+    def collate_fn(
+        batch : List[Tuple[torch.Tensor, torch.Tensor]],
+    ) -> Dict[str, torch.Tensor] :
+        B = len(batch)
+        max_len = max(x.shape[0] for x, _ in batch)
+
+        input_ids_base : torch.Tensor = torch.full((B, max_len), pad_token_id, dtype=torch.long)
+        labels_base = torch.full((B, max_len), ignore_label_id, dtype=torch.long) # padding labels and ignore labels is literally the same because loss function will treat them equally
+
+        for i, (token_ids, labels) in enumerate(batch):
+            l = token_ids.shape[0]
+            input_ids_base[i, :l] = token_ids
+            labels_base[i, :l] = labels
+
+        return {
+            "input_ids": input_ids_base.to(device),
+            "labels": labels_base.to(device)
+        }
+
+    ds_torch = get_as_input_and_labels_pairs()
+
+    dataset = SimpleDataset(ds_torch)
+
+    # Create train/validation split
+    train_size = int(split_ratio * len(dataset))
+    val_size = len(dataset) - train_size
+    train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
+
+    # Create dataloaders with custom collate function
+    train_dataloader = DataLoader(
+        train_dataset,
+        batch_size=batch_size_train,
+        shuffle=True,
+        collate_fn=collate_fn
+    )
+
+    val_dataloader = DataLoader(
+        val_dataset,
+        batch_size=batch_size_eval,
+        shuffle=False,
+        collate_fn=collate_fn
+    )
+
+    return train_dataloader, val_dataloader
+
+
+
+def ex3():
+    ds_raw = get_ds_for_simple_input_output_flat_seuqences(
+        seq_len = 10, 
+        nb_samples = 100,
+        nb_cls = 10,
+        reverse_labels = True
+    )
+    masked_token_id = 100
+    ignore_label_id = -1
+    sep_token_id = 101
+    pad_token_id = 102
+    split_ratio = 0.8
+    batch_size_train = 2
+    batch_size_eval = 2
+    device = "cpu"
+
+    train_dl, val_dl = get_dataloaders_for_flat_seq_cls(
+        ds_raw,
+        masked_token_id,
+        ignore_label_id,
+        sep_token_id,
+        pad_token_id,
+        split_ratio,
+        batch_size_train,
+        batch_size_eval,
+        device
+    )
+
+    for batch in train_dl:
+        print(batch)
+        break
+
 if __name__ == "__main__":
-    # ex1()  
-    ex2()  
-    
+    # ex1()
+    # ex2()
+    ex3()

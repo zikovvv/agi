@@ -28,7 +28,7 @@ class ConvAttBlock(nn.Module) :
         self.cfg = cfg
 
         self.conv = nn.Conv2d(cfg.d_model, cfg.d_model, kernel_size=kernel_size, padding=padding)
-        self.transformer = ROPEAttentionBlock(cfg)
+        self.transformer = TransformerBlockHRM(cfg)
         self.use_transformer = use_transformer
         self.is_testing = is_testing
 
@@ -61,6 +61,63 @@ class ConvAttBlock(nn.Module) :
                 assert x.shape == (B, H, W, D), f"Unexpected shape: {x.shape}"
                 assert x_after_cnn.isclose(x).all(), f"Output mismatch after CNN: {x_after_cnn} vs {x}"
         return x
+
+
+
+
+
+class ConvAttBlock2(nn.Module) :
+    def __init__(
+        self,
+        cfg: ARCCNNConfig,
+        kernel_size: int,
+        padding : int,
+        use_transformer: bool = True,
+        is_testing: bool = False
+    ):
+        super().__init__()
+        self.cfg = cfg
+
+        self.conv = nn.Conv2d(cfg.d_model, cfg.d_model, kernel_size=kernel_size, padding=padding)
+        self.attention = TransformerBlockHRM(cfg)
+        self.use_transformer = use_transformer
+        self.is_testing = is_testing
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, H, W, D = x.shape
+        x = x.permute(0, 3, 1, 2)  # [B, D, H, W]
+        if self.is_testing:    
+            assert x.shape == (B, D, H, W), f"Unexpected shape: {x.shape}"
+        x = self.conv(x)
+        x = torch.nn.functional.gelu(x)
+        if self.is_testing:
+            assert x.shape == (B, D, H, W), f"Unexpected shape: {x.shape}"
+        x = x.permute(0, 2, 3, 1)  # [B, H, W, D]
+        if self.is_testing:
+            assert x.shape == (B, H, W, D), f"Unexpected shape: {x.shape}"
+        x_after_cnn = x.clone()
+        if self.use_transformer :
+            x_B_SEQLEN_D = x.view(x.size(0), -1, x.size(-1)).squeeze()  # [B, H*W, D]
+            if self.is_testing:
+                assert x_B_SEQLEN_D.shape == (B, H * W, D), f"Unexpected shape: {x_B_SEQLEN_D.shape}"
+            
+            
+            x = self.transformer(x_B_SEQLEN_D)
+            if self.is_testing:
+                x = x_B_SEQLEN_D
+                assert x.shape == (B, H * W, D), f"Unexpected shape: {x.shape}"
+            x = x.view(B, H, W, D)  # [B, H, W, D]
+            if self.is_testing:
+            
+                assert x.shape == (B, H, W, D), f"Unexpected shape: {x.shape}"
+                assert x_after_cnn.isclose(x).all(), f"Output mismatch after CNN: {x_after_cnn} vs {x}"
+        return x
+
+
+
+
+
+
 
 
 class ARCCNNModel(nn.Module):
