@@ -282,6 +282,7 @@ def get_dataloaders_for_cnn_masked_modeling(
     batch_size_train : int,
     batch_size_eval : int,
     only_answer : bool,
+    pad_to_max: bool,
     device : str
 ) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
 
@@ -323,6 +324,13 @@ def get_dataloaders_for_cnn_masked_modeling(
 
         max_h = max(x[0].shape[0] for x in batch)
         max_w = max(x[0].shape[1] for x in batch)
+
+        height_koef = 1 if only_answer else 2
+        assert max_h <= max_grid_height * height_koef
+        assert max_w <= max_grid_width
+        if pad_to_max :
+            max_h = max_grid_height * height_koef
+            max_w = max_grid_width
         input_ids_base : torch.Tensor = torch.full((B, max_h, max_w), pad_token_id, dtype=torch.long)
         labels_base = torch.full((B, max_h, max_w), ignore_label_id, dtype=torch.long) # padding labels and ignore labels is literally the same because loss function will treat them equally
 
@@ -412,6 +420,7 @@ def ex2() :
         batch_size_train = 4,
         batch_size_eval = 4,
         only_answer=False,
+        pad_to_max=True,
         device = "cpu"# if torch.cuda.is_available() else "cpu"
     )
     

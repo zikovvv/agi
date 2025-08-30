@@ -274,7 +274,7 @@ def main():
     )
     mcfg : ARCCNNConfig = ARCCNNConfig(
         d_model=256,
-        nhead=8,
+        n_head=8,
         num_layers=6,
         dim_feedforward=1024,
         vocab_size=20,            # adjust to your palette + specials
@@ -310,7 +310,8 @@ def main():
         split_ratio = 1 - dcfg.val_frac,
         batch_size_train = tcfg.batch_size,
         batch_size_eval = tcfg.batch_size,
-        only_answer=False,
+        only_answer=False, # add question to input or not (only answer will be masked anyways)
+        pad_to_max=True, # because now we have rotary embeddings and we need to pad this to the max
         device = tcfg.device
     )
 
@@ -319,16 +320,16 @@ def main():
         l  = f"Epoch {epoch:02d} | "
         for k, v in tr.items() : 
             l += f"{k} {v:.4f} | "
-        print(f"{l}")
+        log(f"{l}")
         
         l  = f"Epoch {epoch:02d} | "
         with torch.no_grad():
             va = evaluate(model, val_dl, nb_plots_on_val = tcfg.nb_plots_on_val)
         for k, v in va.items() : 
             l += f"{k} {v:.4f} | "
-        print(f"{l}")
+        log(f"{l}")
 
-    print("Done.")
+    log("Done.")
 
 if __name__ == "__main__":
     main()
