@@ -239,3 +239,51 @@ class TransformerBlockHRM(nn.Module):
         # Fully Connected
         hidden_states = rms_norm(hidden_states + self.mlp(hidden_states), variance_epsilon=self.norm_eps)
         return hidden_states
+
+
+class  ROPEAttentionBlock(nn.Module):
+    def __init__(
+        self,
+        cfg : ARCCNNConfig,
+    ) -> None:
+        super().__init__()
+            
+        self.cfg = cfg
+        self.rotary_emb = RotaryEmbedding(
+            dim = self.cfg.d_model // self.cfg.n_head,
+            max_position_embeddings = int((self.cfg.max_height * self.cfg.max_width) * 2.5),
+            base = self.cfg.rope_theta
+        )
+        self.rope_cos, self.rope_sin = self.rotary_emb()
+        self.register_buffer('rope_cos', self.rope_cos, persistent=False)
+        self.register_buffer('rope_sin', self.rope_sin, persistent=False)
+
+        self.self_attn = Attention(
+            hidden_size=cfg.d_model,
+            head_dim=cfg.d_model // cfg.n_head,
+            num_heads=cfg.n_head,
+            num_key_value_heads=cfg.n_head,
+            causal=False
+        )
+        self.mlp = SwiGLU(
+            hidden_size=cfg.d_model,
+            expansion=cfg.dim_feedforward / cfg.d_model,
+        )
+        self.swiglu = SwiGLU(
+            hidden_size=cfg.d_model,
+            expansion=cfg.dim_feedforward / cfg.d_model,
+        )
+        self.norm_eps = cfg.layer_norm_eps
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor: # type: ignore
+        # Post Norm
+        # Self Attention
+        log_debug(f'{hidden_states.shape = }')
+        # cos_sin : torch.Tensor = self.rope_cos_sin # type: ignore
+        rope_cos : torch.Tensor = self.rope_cos # type: ignore
+        rope_sin : torch.Tensor = self.rope_sin # type: ignore
+        cos_sin : CosSin = (rope_cos, rope_sin)
+        hidden_states = rms_norm(hidden_states + self.self_attn(cos_sin=cos_sin, hidden_states=hidden_states), variance_epsilon=self.norm_eps)
+        # Fully Connected
+        hidden_states = rms_norm(hidden_states + self.mlp(hidden_states), variance_epsilon=self.norm_eps)
+        return hidden_states

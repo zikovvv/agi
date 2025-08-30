@@ -28,7 +28,7 @@ class ConvAttBlock(nn.Module) :
         self.cfg = cfg
 
         self.conv = nn.Conv2d(cfg.d_model, cfg.d_model, kernel_size=kernel_size, padding=padding)
-        self.transformer = TransformerBlockHRM(cfg)
+        self.transformer = ROPEAttentionBlock(cfg)
         self.use_transformer = use_transformer
         self.is_testing = is_testing
 
@@ -38,6 +38,7 @@ class ConvAttBlock(nn.Module) :
         if self.is_testing:    
             assert x.shape == (B, D, H, W), f"Unexpected shape: {x.shape}"
         x = self.conv(x)
+        x = torch.nn.functional.gelu(x)
         if self.is_testing:
             assert x.shape == (B, D, H, W), f"Unexpected shape: {x.shape}"
         x = x.permute(0, 2, 3, 1)  # [B, H, W, D]
