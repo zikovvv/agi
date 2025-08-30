@@ -99,36 +99,107 @@ def train_one_epoch(model: nn.Module,
 
 
 
+# def plot_eval_batch(
+#     input_ids : torch.Tensor,
+#     labels : torch.Tensor,
+#     labels_predicted : torch.Tensor,
+#     masked_token_id : int,
+# ) -> None:
+#     B, H, W = input_ids.shape
+#     assert ((input_ids == masked_token_id) == (labels != -100)).sum().item() == B * H * W, f'{input_ids.shape = }, {labels.shape = }, {labels_predicted.shape = }'
+#     print(input_ids.shape)
+#     MAX_COLOR = 30
+#     # get predicted values of labels_predicted where labels are masked_token_id
+#     # then place them in a new tensor with the same shape as input_ids
+#     labels_predicted_masked = labels_predicted[input_ids == masked_token_id]
+#     input_ids_with_predictions = input_ids.clone()
+#     # place values of labels_predicted_masked inside of input_ids_with_predictions where input_ids == masked_token_id
+#     input_ids_with_predictions[input_ids == masked_token_id] = labels_predicted_masked
+
+#     fig, axs = plt.subplots(4, min(B, 5), figsize=(6, 12))
+#     for i in range(min(B, 5)):
+#         axs[0, i].imshow(input_ids[i], cmap='tab20', vmin=0, vmax=MAX_COLOR)
+#         axs[0, i].set_title(f'Input ids')
+
+#         axs[1, i].imshow(labels[i], cmap='tab20', vmin=0, vmax=MAX_COLOR)
+#         axs[1, i].set_title(f'Actual labels')
+
+#         axs[2, i].imshow(labels_predicted[i], cmap='tab20', vmin=0, vmax=MAX_COLOR)
+#         axs[2, i].set_title(f'Predicted labels')
+        
+#         axs[3, i].imshow(input_ids_with_predictions[i], cmap='tab20', vmin=0, vmax=MAX_COLOR)
+#         axs[3, i].set_title(f'Predicted labels on inputs')
+#     plt.show()
+
+
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+
 def plot_eval_batch(
-    input_ids : torch.Tensor,
-    labels : torch.Tensor,
-    labels_predicted : torch.Tensor,
-    masked_token_id : int,
+    input_ids: torch.Tensor,
+    labels: torch.Tensor,
+    labels_predicted: torch.Tensor,
+    masked_token_id: int,
+    *,
+    max_color: int = 30,
+    cmap: str = "tab20",
+    cell_inches: float = 2.0,      # size of each small image (inches)
+    dpi: int = 200,                # higher -> sharper
+    show_row_labels: bool = True,  # overlay row labels instead of titles (no extra space)
 ) -> None:
+    """
+    4 x B grid with NO whitespace.
+    Rows: [Input ids, Actual labels, Predicted labels, Predicted on inputs]
+    Columns: all batch elements.
+    """
     B, H, W = input_ids.shape
-    assert ((input_ids == masked_token_id) == (labels != -100)).sum().item() == B * H * W
-    print(input_ids.shape)
-    MAX_COLOR = 30
-    # get predicted values of labels_predicted where labels are masked_token_id
-    # then place them in a new tensor with the same shape as input_ids
+    assert ((input_ids == masked_token_id) == (labels != -100)).sum().item() == B * H * W, \
+        f"{input_ids.shape = }, {labels.shape = }, {labels_predicted.shape = }"
+
+    # Fill masked tokens with predictions
     labels_predicted_masked = labels_predicted[input_ids == masked_token_id]
     input_ids_with_predictions = input_ids.clone()
-    # place values of labels_predicted_masked inside of input_ids_with_predictions where input_ids == masked_token_id
     input_ids_with_predictions[input_ids == masked_token_id] = labels_predicted_masked
 
-    fig, axs = plt.subplots(4, min(B, 5), figsize=(6, 12))
-    for i in range(min(B, 5)):
-        axs[0, i].imshow(input_ids[i], cmap='tab20', vmin=0, vmax=MAX_COLOR)
-        axs[0, i].set_title(f'Input ids')
+    # Build figure sized exactly to the grid; no margins, no gaps
+    nrows, ncols = 4, B
+    fig = plt.figure(figsize=(cell_inches * ncols, cell_inches * nrows), dpi=dpi)
+    gs = fig.add_gridspec(nrows, ncols, wspace=0.0, hspace=0.0)
 
-        axs[1, i].imshow(labels[i], cmap='tab20', vmin=0, vmax=MAX_COLOR)
-        axs[1, i].set_title(f'Actual labels')
+    # Helper to render one small image without axes chrome
+    def _show(ax, arr):
+        # Ensure numpy
+        if isinstance(arr, torch.Tensor):
+            arr = arr.detach().cpu().numpy()
+        ax.imshow(arr, cmap=cmap, vmin=0, vmax=max_color, interpolation="nearest")
+        ax.set_axis_off()
+        # Keep pixels square & tight
+        ax.set_aspect("equal", adjustable="box")
 
-        axs[2, i].imshow(labels_predicted[i], cmap='tab20', vmin=0, vmax=MAX_COLOR)
-        axs[2, i].set_title(f'Predicted labels')
-        
-        axs[3, i].imshow(input_ids_with_predictions[i], cmap='tab20', vmin=0, vmax=MAX_COLOR)
-        axs[3, i].set_title(f'Predicted labels on inputs')
+    # Fill grid
+    for j in range(ncols):
+        _show(fig.add_subplot(gs[0, j]), input_ids[j])
+        _show(fig.add_subplot(gs[1, j]), labels[j])
+        _show(fig.add_subplot(gs[2, j]), labels_predicted[j])
+        _show(fig.add_subplot(gs[3, j]), input_ids_with_predictions[j])
+
+    # Absolutely no outer padding
+    fig.subplots_adjust(left=0, right=1, top=1, bottom=0, wspace=0, hspace=0)
+
+    # Optional overlay row labels (doesn't add layout space)
+    if show_row_labels and ncols > 0:
+        row_names = ["Input ids", "Actual labels", "Predicted labels", "Predicted on inputs"]
+        for r, name in enumerate(row_names):
+            ax0 = fig.axes[r * ncols + 0]  # leftmost axis of the row
+            ax0.text(
+                0.02, 0.02, name,
+                transform=ax0.transAxes,
+                ha="left", va="bottom",
+                fontsize=10,
+                bbox=dict(facecolor="white", alpha=0.7, edgecolor="none", pad=2),
+            )
+
     plt.show()
 
 
@@ -239,7 +310,7 @@ def main():
         split_ratio = 1 - dcfg.val_frac,
         batch_size_train = tcfg.batch_size,
         batch_size_eval = tcfg.batch_size,
-        only_answer=True,
+        only_answer=False,
         device = tcfg.device
     )
 

@@ -294,36 +294,17 @@ def get_dataloaders_for_cnn_masked_modeling(
             return a, l_copy
         
         else :
-            raise NotImplementedError()
-            # stick both question and answer together into onr grid and they have t be separated by 
-            # newline token and whoever is smaller has to be padded with pad token
-            # Pad both grids to max dimensions
-            q_padded = np.full((max_grid_height, max_grid_width), pad_token_type_id, dtype=q.dtype)
-            a_padded = np.full((max_grid_height, max_grid_width), pad_token_type_id, dtype=a.dtype)
+            qa_field = torch.full((max_grid_height * 2, max_grid_width), pad_token_id, dtype=torch.long)
+            labels_field = torch.full((max_grid_height * 2, max_grid_width), ignore_label_id, dtype=torch.long)
 
-            # Copy original grids into padded versions
-            q_h, q_w = q.shape
-            a_h, a_w = a.shape
-            q_padded[:q_h, :q_w] = q
-            a_padded[:a_h, :a_w] = a
-
-            # Create combined grid with question on top, newline separator, then answer
-            combined_height = max_grid_height + 1 + max_grid_height  # q + newline + a
-            combined_grid = np.full((combined_height, max_grid_width), pad_token_type_id, dtype=q.dtype)
-
-            # Place question in top part
-            combined_grid[:max_grid_height, :] = q_padded
-
-            # Add newline separator row
-            combined_grid[max_grid_height, :] = newline_token_id
-
-            # Place answer in bottom part
-            combined_grid[max_grid_height + 1:, :] = a_padded
-
-            # Convert to tensors
-            input_tensor = torch.tensor(combined_grid, dtype=torch.long)
-            label_tensor = torch.tensor(l, dtype=torch.long)
-            return input_tensor, label_tensor
+            # Copy question and answer into the fields
+            qa_field[:q.shape[0], :q.shape[1]] = q
+            qa_field[max_grid_height:max_grid_height + a.shape[0], :a.shape[1]] = a
+            labels_field[max_grid_height:max_grid_height + l.shape[0], :l.shape[1]] = l
+            l_copy = labels_field.clone()
+            l_mask = qa_field != masked_token_id
+            l_copy[l_mask] = ignore_label_id
+            return qa_field, l_copy
 
     def get_as_input_and_labels_pairs() -> List[Tuple[torch.Tensor, torch.Tensor]] :
         res = []
@@ -406,7 +387,7 @@ def ex2() :
     raw_ds = get_ds_for_masked_modeling_only_answer_only_foreground_items(
         gen_examples(
             name = PuzzleNames.FIll_SIMPLE_OPENED_SHAPE,
-            nb_examples = 2000,
+            nb_examples = 100,
             augment_colors = True,
             do_shuffle = False
         ),
@@ -430,7 +411,7 @@ def ex2() :
         split_ratio = 0.8,
         batch_size_train = 4,
         batch_size_eval = 4,
-        only_answer=True,
+        only_answer=False,
         device = "cpu"# if torch.cuda.is_available() else "cpu"
     )
     
