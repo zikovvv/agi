@@ -106,19 +106,18 @@ def plot_eval_batch(
     masked_token_id : int,
 ) -> None:
     B, H, W = input_ids.shape
-    B = min(B, 5)
+    assert ((input_ids == masked_token_id) == (labels != -100)).sum().item() == B * H * W
     print(input_ids.shape)
     MAX_COLOR = 30
     # get predicted values of labels_predicted where labels are masked_token_id
     # then place them in a new tensor with the same shape as input_ids
-    assert ((input_ids == masked_token_id) == (labels != -100)).sum().item() == B * H * W
     labels_predicted_masked = labels_predicted[input_ids == masked_token_id]
     input_ids_with_predictions = input_ids.clone()
     # place values of labels_predicted_masked inside of input_ids_with_predictions where input_ids == masked_token_id
     input_ids_with_predictions[input_ids == masked_token_id] = labels_predicted_masked
 
-    fig, axs = plt.subplots(4, B, figsize=(6, 12))
-    for i in range(B):
+    fig, axs = plt.subplots(4, min(B, 5), figsize=(6, 12))
+    for i in range(min(B, 5)):
         axs[0, i].imshow(input_ids[i], cmap='tab20', vmin=0, vmax=MAX_COLOR)
         axs[0, i].set_title(f'Input ids')
 
