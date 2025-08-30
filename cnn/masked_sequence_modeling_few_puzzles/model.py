@@ -19,15 +19,21 @@ class ConvAttBlock(nn.Module) :
     def __init__(
         self,
         cfg: ARCCNNConfig,
-        rope_cos_sin: torch.Tensor,
         kernel_size: int,
         padding : int,
         use_transformer: bool = True,
         is_testing: bool = False
     ):
         super().__init__()
+        self.cfg = cfg
+        self.rotary_emb = RotaryEmbedding(
+            dim = self.cfg.d_model // self.cfg.n_head,
+            max_position_embeddings = int((self.cfg.max_height * self.cfg.max_width) * 2.5),
+            base = self.cfg.rope_theta
+        )
+        self.rope_cos_sin = self.rotary_emb()
         self.conv = nn.Conv2d(cfg.d_model, cfg.d_model, kernel_size=kernel_size, padding=padding)
-        self.transformer = TransformerBlockHRM(cfg, rope_cos_sin)
+        self.transformer = TransformerBlockHRM(cfg, self.rope_cos_sin)
         self.use_transformer = use_transformer
         self.is_testing = is_testing
 
@@ -65,27 +71,12 @@ class ARCCNNModel(nn.Module):
     def __init__(self, cfg: ARCCNNConfig):
         super().__init__()
         self.cfg = cfg
-        self.rotary_emb = RotaryEmbedding(
-            dim = self.cfg.d_model // self.cfg.n_head,
-            max_position_embeddings = int((self.cfg.max_height * self.cfg.max_width) * 2.5),
-            base = self.cfg.rope_theta
-        )
-        self.rope_cos_sin : torch.Tensor = self.rotary_emb()
-        # print(self.rope_mat[0])
-        # print(self.rope_mat[0].shape)
-        
-        # print(self.rope_mat[1])
-        # print(self.rope_mat[1].shape)
-        # # exit()
         d = cfg.d_model
-
-        # Embeddings
         self.token_embed = nn.Embedding(cfg.vocab_size, d)
-
         self.encoder = nn.Sequential(
-            ConvAttBlock(cfg, self.rope_cos_sin, kernel_size=3, padding=1),
-            ConvAttBlock(cfg, self.rope_cos_sin, kernel_size=5, padding=2),
-            ConvAttBlock(cfg, self.rope_cos_sin, kernel_size=7, padding=3),
+            ConvAttBlock(cfg, kernel_size=3, padding=1),
+            ConvAttBlock(cfg, kernel_size=5, padding=2),
+            ConvAttBlock(cfg, kernel_size=7, padding=3),
         )
 
     def forward(
@@ -98,6 +89,8 @@ class ARCCNNModel(nn.Module):
         # log_debug('after permutation', x.shape)
         h = self.encoder(x)
         return h
+
+    #
     
     
     

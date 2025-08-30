@@ -206,7 +206,7 @@ class TransformerBlockHRM(nn.Module):
     ) -> None:
         super().__init__()
         self.cfg = cfg
-        self.rope_cos_sin = rope_cos_sin
+        self.register_buffer('rope_cos_sin', rope_cos_sin, persistent=False)
 
         self.self_attn = Attention(
             hidden_size=cfg.d_model,
@@ -225,7 +225,8 @@ class TransformerBlockHRM(nn.Module):
         # Post Norm
         # Self Attention
         log_debug(f'{hidden_states.shape = }')
-        hidden_states = rms_norm(hidden_states + self.self_attn(cos_sin=self.rope_cos_sin, hidden_states=hidden_states), variance_epsilon=self.norm_eps)
+        cos_sin : torch.Tensor = self.rope_cos_sin # type: ignore
+        hidden_states = rms_norm(hidden_states + self.self_attn(cos_sin=cos_sin, hidden_states=hidden_states), variance_epsilon=self.norm_eps)
         # Fully Connected
         hidden_states = rms_norm(hidden_states + self.mlp(hidden_states), variance_epsilon=self.norm_eps)
         return hidden_states

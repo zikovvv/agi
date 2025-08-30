@@ -54,7 +54,7 @@ class TrainConfig:
     epochs: int = 50
     batch_size: int = 16
     lr: float = 3e-4
-    device: str = "cpu"
+    device: str = "cpu" if not torch.cuda.is_available() else "cuda"
 
 def train_one_epoch(model: nn.Module,
                     loader: DataLoader,
