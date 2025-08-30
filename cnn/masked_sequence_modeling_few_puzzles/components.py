@@ -5,7 +5,7 @@ from torch import nn
 import torch.nn.functional as F
 from torch.nn.functional import scaled_dot_product_attention as sdpa
 from common import *
-from cnn.masked_sequence_modeling_few_puzzles.cfg import ARCCNNConfig
+from cnn.masked_sequence_modeling_few_puzzles.config import ARCCNNConfig
 
 
 def trunc_normal_init_(tensor: torch.Tensor, std: float = 1.0, lower: float = -2.0, upper: float = 2.0):

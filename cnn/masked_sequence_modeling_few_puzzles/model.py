@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from cnn.masked_sequence_modeling_few_puzzles.cfg import ARCCNNConfig
+from cnn.masked_sequence_modeling_few_puzzles.config import ARCCNNConfig
 from cnn.masked_sequence_modeling_few_puzzles.components import RotaryEmbedding, TransformerBlockHRM
 from common import *
 

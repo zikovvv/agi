@@ -54,7 +54,7 @@ class TrainConfig:
     epochs: int = 50
     batch_size: int = 16
     lr: float = 3e-4
-    device: str = "cuda" if torch.cuda.is_available() else "cpu"
+    device: str = "cpu"
 
 def train_one_epoch(model: nn.Module,
                     loader: DataLoader,
@@ -259,20 +259,23 @@ logger.remove()
 logger.add(sys.stderr, level="INFO")
 
 
-def main():
-
+def main(
+    dcfg : Optional[DatasetConfig] = None,
+    tcfg : Optional[TrainConfig] = None,
+    mcfg : Optional[ARCCNNConfig] = None
+):
     dcfg = DatasetConfig(
         seed=123,
         val_frac=0.1,
         test_frac=0.0,
         percentage_masked=0.2,
         num_samples=12
-    )
+    ) if dcfg is None else dcfg
     tcfg = TrainConfig(
         batch_size=4,
         lr=3e-4
-    )
-    mcfg : ARCCNNConfig = ARCCNNConfig(
+    ) if tcfg is None else tcfg
+    mcfg = ARCCNNConfig(
         d_model=256,
         n_head=8,
         num_layers=6,
@@ -280,8 +283,7 @@ def main():
         vocab_size=20,            # adjust to your palette + specials
         max_height=40,
         max_width=40,
-    )
-    tcfg.device = 'cpu'
+    ) if mcfg is None else mcfg
 
     
     model = _get_model(mcfg, tcfg)
