@@ -26,14 +26,9 @@ class ConvAttBlock(nn.Module) :
     ):
         super().__init__()
         self.cfg = cfg
-        self.rotary_emb = RotaryEmbedding(
-            dim = self.cfg.d_model // self.cfg.n_head,
-            max_position_embeddings = int((self.cfg.max_height * self.cfg.max_width) * 2.5),
-            base = self.cfg.rope_theta
-        )
-        self.rope_cos_sin = self.rotary_emb()
+
         self.conv = nn.Conv2d(cfg.d_model, cfg.d_model, kernel_size=kernel_size, padding=padding)
-        self.transformer = TransformerBlockHRM(cfg, self.rope_cos_sin)
+        self.transformer = TransformerBlockHRM(cfg)
         self.use_transformer = use_transformer
         self.is_testing = is_testing
 

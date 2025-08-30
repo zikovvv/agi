@@ -116,7 +116,7 @@ class RotaryEmbedding(nn.Module):
         self.cos_cached = nn.Buffer(emb.cos(), persistent=False)
         self.sin_cached = nn.Buffer(emb.sin(), persistent=False)
 
-    def forward(self):
+    def forward(self) -> Tuple[torch.Tensor, torch.Tensor]:
         return self.cos_cached, self.sin_cached
 
 
@@ -202,11 +202,17 @@ class TransformerBlockHRM(nn.Module):
     def __init__(
         self,
         cfg : ARCCNNConfig,
-        rope_cos_sin : torch.Tensor,
     ) -> None:
         super().__init__()
         self.cfg = cfg
-        self.register_buffer('rope_cos_sin', rope_cos_sin, persistent=False)
+        self.rotary_emb = RotaryEmbedding(
+            dim = self.cfg.d_model // self.cfg.n_head,
+            max_position_embeddings = int((self.cfg.max_height * self.cfg.max_width) * 2.5),
+            base = self.cfg.rope_theta
+        )
+        self.rope_cos, self.rope_sin = self.rotary_emb()
+        self.register_buffer('rope_cos', self.rope_cos, persistent=False)
+        self.register_buffer('rope_sin', self.rope_sin, persistent=False)
 
         self.self_attn = Attention(
             hidden_size=cfg.d_model,
@@ -225,7 +231,10 @@ class TransformerBlockHRM(nn.Module):
         # Post Norm
         # Self Attention
         log_debug(f'{hidden_states.shape = }')
-        cos_sin : torch.Tensor = self.rope_cos_sin # type: ignore
+        # cos_sin : torch.Tensor = self.rope_cos_sin # type: ignore
+        rope_cos : torch.Tensor = self.rope_cos # type: ignore
+        rope_sin : torch.Tensor = self.rope_sin # type: ignore
+        cos_sin : CosSin = (rope_cos, rope_sin)
         hidden_states = rms_norm(hidden_states + self.self_attn(cos_sin=cos_sin, hidden_states=hidden_states), variance_epsilon=self.norm_eps)
         # Fully Connected
         hidden_states = rms_norm(hidden_states + self.mlp(hidden_states), variance_epsilon=self.norm_eps)
