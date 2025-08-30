@@ -6,7 +6,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from encoder.flat_seq_exp.config import EncoderConfig
+from encoder.hrm_like_enc.components import TransformerBlockHRM
+from encoder.hrm_like_enc.config import EncoderConfig
 
 class EncoderModel(nn.Module):
     def __init__(self, cfg: EncoderConfig):
@@ -23,37 +24,24 @@ class EncoderModel(nn.Module):
 
         self.embed_ln = nn.LayerNorm(d, eps=cfg.layer_norm_eps)
         self.embed_drop = nn.Dropout(cfg.dropout)
+        self.seq_len = cfg.max_len
 
-        # Transformer Encoder (bidirectional)
-        enc_layer = nn.TransformerEncoderLayer(
-            d_model=d,
-            nhead=cfg.n_head,
-            dim_feedforward=cfg.dim_feedforward,
-            dropout=cfg.dropout,
-            activation="gelu",
-            batch_first=True,
-            norm_first=cfg.norm_first
+        self.encoder = nn.Sequential(
+            *[TransformerBlockHRM(self.cfg) for _ in range(self.cfg.num_layers)]
         )
-        self.encoder = nn.TransformerEncoder(
-            enc_layer, num_layers=cfg.num_layers,
-            norm=nn.LayerNorm(d, eps=cfg.layer_norm_eps)
-        )
-
+        
     def forward(
         self,
         input_ids: torch.Tensor,        # [B, L]
     ) -> torch.Tensor:
-        # print(input_ids,rows, cols, token_type_ids)
-        x_tok = self.token_embed(input_ids)                  # [B,L,D]
-        # print(f'{x_tok.shape=}')
-        # print(x_tok.shape, x_tok.dtype)
-        if self.cfg.embeddings_type == 'learnable':
-            x_pos = self.pos_emb(torch.arange(input_ids.size(1), device=input_ids.device).unsqueeze(0))  # [1,L,D]
-        else : 
-            raise NotImplementedError("Only 'learnable' embeddings are implemented")
-        x = x_tok + x_pos
-        x = self.embed_ln(x)
-        h = self.encoder(x)  # [B,L,D]
+        # print(input_ids.shape)
+        # exit()
+        x = self.token_embed(input_ids)  # [B,L,D]
+        # x = self.embed_ln(x)
+        h = self.encoder(x)
+        if self.cfg.nb_refinement_steps > 1:
+            for i in range(self.cfg.nb_refinement_steps - 1):
+                h = self.encoder(h)
         return h
 
 

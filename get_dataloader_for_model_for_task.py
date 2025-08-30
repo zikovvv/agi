@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from gen_simple_arc_ds import gen_examples, PuzzleNames
+from gen_simple_arc_ds import gen_arc_puzzle_ex, PuzzleNames
 from get_ds_for_task import get_ds_for_simple_input_output_flat_seuqences, get_ds_for_masked_modeling_only_answer, get_ds_for_masked_modeling_only_answer_only_foreground_items
 
 class SimpleDataset(Dataset):
@@ -233,8 +233,8 @@ def ex1 ():
     newline_token_id = 12
     pad_token_id = 18
     raw_ds = get_ds_for_masked_modeling_only_answer_only_foreground_items(
-        gen_examples(
-            name = PuzzleNames.FIll_SIMPLE_OPENED_SHAPE,
+        gen_arc_puzzle_ex(
+            name = PuzzleNames.FILL_SIMPLE_OPENED_SHAPE,
             nb_examples = 100,
             augment_colors = False,
             do_shuffle = False
@@ -393,8 +393,8 @@ def ex2() :
     newline_token_id = 12
     pad_token_id = 18
     raw_ds = get_ds_for_masked_modeling_only_answer_only_foreground_items(
-        gen_examples(
-            name = PuzzleNames.FIll_SIMPLE_OPENED_SHAPE,
+        gen_arc_puzzle_ex(
+            name = PuzzleNames.FILL_SIMPLE_OPENED_SHAPE,
             nb_examples = 100,
             augment_colors = True,
             do_shuffle = False
@@ -523,7 +523,7 @@ def get_dataloaders_for_flat_seq_cls(
     train_size = int(split_ratio * len(dataset))
     val_size = len(dataset) - train_size
     train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
-
+    print(len(train_dataset), len(val_dataset))
     # Create dataloaders with custom collate function
     train_dataloader = DataLoader(
         train_dataset,
@@ -545,10 +545,10 @@ def get_dataloaders_for_flat_seq_cls(
 
 def ex3():
     ds_raw = get_ds_for_simple_input_output_flat_seuqences(
-        seq_len = 10, 
+        seq_len = 32, 
         nb_samples = 100,
         nb_cls = 10,
-        reverse_labels = True
+        task='split_in_8_pieces_and_recombine'
     )
     masked_token_id = 100
     ignore_label_id = -1

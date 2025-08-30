@@ -8,17 +8,23 @@ vers = get_verifiers()
 
     
 class PuzzleNames(Enum) :
-    FIll_SIMPLE_OPENED_SHAPE = '444801d8'
+    FILL_SIMPLE_OPENED_SHAPE = '444801d8'
     DENOISING = '5614dbcf'
+    MOVE_RANDOM_NOISE_INTO_OUTLINED_BY_CORNERS_PLACE = 'a1570a43'
+    FILL_NOISED_CLOSED_SHAPES_CONNECTED = '00d62c1b'
 
 
-def gen_examples(
+    DRAW_ZIGZAG_PATTERN_FROM_POINTS_IN_THE_CORNERS_OF_FIELDS = 'e179c5f4'
+    REPEAT_SHAPE_BASED_ON_SOME_ADJACENT_COLORED_CELLS_THAT_MARK_DIRECTION = 'e8dc4411'
+
+
+def gen_arc_puzzle_ex(
     name : PuzzleNames | str,
     nb_examples = 100,
     augment_colors : bool = False,
     max_colors_augmentations : int = 10,
     do_shuffle : bool = True,
-) :
+) -> List[Tuple[np.ndarray, np.ndarray]]:
     if isinstance(name, PuzzleNames):
         name = name.value
 
@@ -41,8 +47,9 @@ def gen_examples(
     return examples
 
 def main() :
-    name = PuzzleNames.FIll_SIMPLE_OPENED_SHAPE
-    examples = gen_examples(name)
+    name = PuzzleNames.FILL_SIMPLE_OPENED_SHAPE
+    name = 'e8dc4411'
+    examples = gen_arc_puzzle_ex(name)
     examples = examples[:10] 
     show_example(examples)
     

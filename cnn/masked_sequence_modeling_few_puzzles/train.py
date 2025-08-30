@@ -2,7 +2,7 @@ import gc
 import json
 import traceback
 import tqdm
-from gen_simple_arc_ds import gen_examples, PuzzleNames
+from gen_simple_arc_ds import gen_arc_puzzle_ex, PuzzleNames
 from get_dataloader_for_model_for_task import get_dataloaders_for_cnn_masked_modeling
 from get_ds_for_task import get_ds_for_masked_modeling_only_answer, get_ds_for_masked_modeling_only_answer_only_foreground_items
 from model import *
@@ -292,8 +292,8 @@ def main(
 
     
     raw_ds = get_ds_for_masked_modeling_only_answer(
-        gen_examples(
-            name = PuzzleNames.FIll_SIMPLE_OPENED_SHAPE,
+        gen_arc_puzzle_ex(
+            name = PuzzleNames.FILL_SIMPLE_OPENED_SHAPE,
             nb_examples = dcfg.num_samples,
             augment_colors = False,
             do_shuffle = False

@@ -8,14 +8,17 @@ class EncoderConfig:
    # Model dims
     d_model: int = 512
     n_head: int = 8
-    num_layers: int = 8
-    dim_feedforward: int = 2048
+    num_layers: int = 2
+    nb_refinement_steps: int = 8
+    dim_feedforward: int = 1024
     dropout: float = 0.1
     norm_first: bool = True
     layer_norm_eps: float = 1e-5
+    rope_theta: float = 10000.0
+    
 
     # Grid limits
-    max_len: int = 150
+    max_len: int = 5000
 
     # Vocabulary
     vocab_size: int = 200
@@ -38,6 +41,7 @@ class DatasetConfig:
     val_frac: float = 0.1
     test_frac: float = 0.0    # set >0 for a held-out test split
     seq_len : int = 15
+    max_width :int = 40
 
 @dataclass
 class TrainConfig:
