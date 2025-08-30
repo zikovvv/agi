@@ -1,4 +1,6 @@
+import gc
 import json
+import traceback
 import tqdm
 from gen_simple_ds import gen_examples, PuzzleNames
 from get_dataloader_for_model_for_task import get_dataloaders_for_cnn_masked_modeling
@@ -7,7 +9,7 @@ from model import *
 import math
 from dataclasses import dataclass
 import sys
-from typing import Dict, Optional, Tuple
+from typing import Callable, Dict, Optional, Tuple
 import numpy as np
 import torch
 from torch import nn
@@ -17,6 +19,8 @@ from common import *
 from datasets import Dataset
 import torch
 from torch import nn
+import atexit
+import weakref
 import matplotlib.pyplot as plt
 
 
@@ -102,6 +106,7 @@ def plot_eval_batch(
     masked_token_id : int,
 ) -> None:
     B, H, W = input_ids.shape
+    B = min(B, 5)
     print(input_ids.shape)
     MAX_COLOR = 30
     # get predicted values of labels_predicted where labels are masked_token_id
@@ -143,10 +148,11 @@ def evaluate(
     total_correct = 0
     total_classified = 0
     for batch in loader:
-        input_ids, labels = batch['input_ids'], batch['labels']
+        input_ids : torch.Tensor = batch['input_ids']
+        labels : torch.Tensor = batch['labels']
         res = model(input_ids, labels)
         loss = res['loss']
-        logits = res['logits']
+        logits : torch.Tensor = res['logits']
         preds = logits.argmax(dim=-1)
         nb_corr_cur = (preds == labels).sum().item()
         nb_masked = (labels != ignored_id).sum().item()
@@ -157,7 +163,12 @@ def evaluate(
 
         total += input_ids.shape[0]
         if plotted_examples < nb_plots_on_val:
-            plot_eval_batch(input_ids, labels, preds, masked_token_id=masked_token_id)
+            plot_eval_batch(
+                input_ids.cpu().detach(),
+                labels.cpu().detach(),
+                preds.cpu().detach(),
+                masked_token_id=masked_token_id
+            )
             plotted_examples += 1
 
     avg_loss = total_loss / max(total, 1)
@@ -176,6 +187,7 @@ def _get_optimizer(model, tcfg : TrainConfig) :
 
 logger.remove()
 logger.add(sys.stderr, level="INFO")
+
 
 def main():
 
@@ -204,13 +216,15 @@ def main():
     
     model = _get_model(mcfg, tcfg)
     optimizer = _get_optimizer(model, tcfg)
+    atexit.register(get_cleanup_function(model, optimizer=optimizer))
+
     
-    raw_ds = get_ds_for_masked_modeling_only_answer_only_foreground_items(
+    raw_ds = get_ds_for_masked_modeling_only_answer(
         gen_examples(
             name = PuzzleNames.FIll_SIMPLE_OPENED_SHAPE,
             nb_examples = dcfg.num_samples,
-            augment_colors = True,
-            do_shuffle = True
+            augment_colors = False,
+            do_shuffle = False
         ),
         dcfg.percentage_masked,
         mcfg.masked_token_id
