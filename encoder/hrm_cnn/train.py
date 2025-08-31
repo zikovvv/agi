@@ -1,5 +1,7 @@
 import atexit
+import datetime
 import json
+import os
 import tqdm
 from encoder.hrm_cnn.config import DatasetConfig, TrainConfig, EncoderConfig            
 from gen_simple_arc_ds import PuzzleNames, gen_arc_puzzle_ex
@@ -217,7 +219,9 @@ def main(
         )
         return train_dl, val_dl
     train_dl, val_dl = get_train_val_dls()
-    for epoch in range(1, tcfg.epochs + 1):
+    epoch = 0
+    best_val_loss = float("inf")
+    while True :
         tr = train_one_epoch(model, train_dl, optimizer)
         l  = f"Epoch {epoch:02d} | "
         for k, v in tr.items() : 
@@ -227,10 +231,20 @@ def main(
         l  = f"Epoch {epoch:02d} | "
         with torch.no_grad():
             va = evaluate(model, val_dl, show_nb_first_preds=4, max_field_width=dcfg.max_width)
+        if va['loss'] < best_val_loss:
+            best_val_loss = va['loss']
+            log(f"New best validation loss: {best_val_loss:.4f}")
+            # save checkpoint
+            current_date = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            loss_string_no_comma = f'{best_val_loss:.4f}'.replace(',', '')
+            # ensure path exists
+            os.makedirs(f'./best_models/', exist_ok=True)
+            torch.save(model.state_dict(), f'./best_models/{current_date}_{loss_string_no_comma}.pth')
         for k, v in va.items() : 
             l += f"{k} {v:.4f} | "
         log(f"{l}")
         train_dl, _ = get_train_val_dls()
+        epoch += 1
 
     log("Done.")
 

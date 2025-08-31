@@ -698,6 +698,7 @@ def ex4() :
         batch_size_train,
         batch_size_eval,
         max_grid_width=40,
+        add_input_to_labels=True,
         device=device
     )
 
