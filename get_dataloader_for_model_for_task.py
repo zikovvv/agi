@@ -591,6 +591,7 @@ def get_dataloaders_for_2d_full_pred(
     max_grid_width : int,
     device : str,
     add_input_to_labels : bool = False,
+    copy_input_to_output : bool = False
 ) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
     def sample_as_input_output_pair(inp : torch.Tensor, l : torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor] :
         i_field = torch.full((max_grid_width * 2, max_grid_width), pad_token_id, dtype=torch.long)
@@ -600,6 +601,8 @@ def get_dataloaders_for_2d_full_pred(
         l_field[max_grid_width:max_grid_width + l.shape[0], :l.shape[1]] = l
         if add_input_to_labels :
             l_field[:inp.shape[0], :inp.shape[1]] = inp
+        if copy_input_to_output :
+            i_field[max_grid_width:max_grid_width + l.shape[0], :l.shape[1]] = inp
         return i_field, l_field
 
     def get_as_input_and_labels_pairs() -> List[Tuple[torch.Tensor, torch.Tensor]] :
@@ -678,7 +681,7 @@ def ex4() :
         plt.show()
         
     ds_raw = gen_arc_puzzle_ex(
-        name = PuzzleNames.FILL_SIMPLE_OPENED_SHAPE,
+        name = PuzzleNames.FILL_NOISED_CLOSED_SHAPES_CONNECTED,
         nb_examples = 100,
         augment_colors = False,
         do_shuffle = False
@@ -699,6 +702,7 @@ def ex4() :
         batch_size_eval,
         max_grid_width=40,
         add_input_to_labels=True,
+        copy_input_to_output=True,
         device=device
     )
 
