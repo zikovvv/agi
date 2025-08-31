@@ -589,7 +589,8 @@ def get_dataloaders_for_2d_full_pred(
     batch_size_train : int,
     batch_size_eval : int,
     max_grid_width : int,
-    device : str
+    device : str,
+    add_input_to_labels : bool = False,
 ) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
     def sample_as_input_output_pair(inp : torch.Tensor, l : torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor] :
         i_field = torch.full((max_grid_width * 2, max_grid_width), pad_token_id, dtype=torch.long)
@@ -597,6 +598,8 @@ def get_dataloaders_for_2d_full_pred(
         # print(inp.shape, l.shape)
         i_field[:inp.shape[0], :inp.shape[1]] = inp
         l_field[max_grid_width:max_grid_width + l.shape[0], :l.shape[1]] = l
+        if add_input_to_labels :
+            l_field[:inp.shape[0], :inp.shape[1]] = inp
         return i_field, l_field
 
     def get_as_input_and_labels_pairs() -> List[Tuple[torch.Tensor, torch.Tensor]] :

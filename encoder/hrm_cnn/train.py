@@ -197,22 +197,26 @@ def main(
     optimizer = _get_optimizer(model, tcfg)
     atexit.register(get_cleanup_function(model, optimizer=optimizer))
     
-    ds_raw = gen_arc_puzzle_ex(
-        name = PuzzleNames.FILL_SIMPLE_OPENED_SHAPE,
-        nb_examples = dcfg.num_samples,
-        augment_colors = False,
-        do_shuffle = False
-    )
-    train_dl, val_dl = get_dataloaders_for_2d_full_pred(
-        ds_raw,
-        ignore_label_id = mcfg.ignore_id,
-        pad_token_id = mcfg.pad_token_id,
-        split_ratio = 1 - dcfg.val_frac,
-        batch_size_train = tcfg.batch_size,
-        batch_size_eval = tcfg.batch_size,
-        max_grid_width=dcfg.max_width,
-        device = tcfg.device
-    )
+    def get_train_val_dls() :
+        ds_raw = gen_arc_puzzle_ex(
+            name = PuzzleNames.FILL_SIMPLE_OPENED_SHAPE,
+            nb_examples = dcfg.num_samples,
+            augment_colors = False,
+            do_shuffle = False
+        )
+        train_dl, val_dl = get_dataloaders_for_2d_full_pred(
+            ds_raw,
+            ignore_label_id = mcfg.ignore_id,
+            pad_token_id = mcfg.pad_token_id,
+            split_ratio = 1 - dcfg.val_frac,
+            batch_size_train = tcfg.batch_size,
+            batch_size_eval = tcfg.batch_size,
+            max_grid_width=dcfg.max_width,
+            add_input_to_labels=True,
+            device = tcfg.device,
+        )
+        return train_dl, val_dl
+    train_dl, val_dl = get_train_val_dls()
     for epoch in range(1, tcfg.epochs + 1):
         tr = train_one_epoch(model, train_dl, optimizer)
         l  = f"Epoch {epoch:02d} | "
@@ -226,6 +230,7 @@ def main(
         for k, v in va.items() : 
             l += f"{k} {v:.4f} | "
         log(f"{l}")
+        train_dl, _ = get_train_val_dls()
 
     log("Done.")
 
