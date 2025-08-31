@@ -1,3 +1,4 @@
+import random
 from typing import Dict, List, Literal, Optional, Tuple
 from matplotlib import pyplot as plt
 import numpy as np
@@ -49,7 +50,7 @@ def get_ds_for_copy_question(
 
 
 
-def get_ds_for_simple_input_output_flat_seuqences(
+def get_ds_1d_seq_for_random_input_with_some_transformation_for_output(
     seq_len : int,
     nb_samples : int,
     nb_cls : int,
@@ -77,6 +78,47 @@ def get_ds_for_simple_input_output_flat_seuqences(
 
     return [(s, s) for s in seq]
 
+
+
+def get_ds_arc_for_1d(
+    seq_len : int,
+    nb_samples : int,
+    nb_cls : int,
+    task: Literal['fill_between_pieces'],
+    # color_permutation : Optional[Dict[int, int]] = None,
+) -> List[Tuple[np.ndarray, np.ndarray]] :
+    match task:
+        case 'fill_between_pieces':
+            bg_colors = [0, 4, 6]
+            figure_to_filling_color :Dict[int, int] = {
+                1:3, 2:5, 3:7, 5:9
+            }
+            figure_colors = [1, 2, 3, 5]
+
+            fig_shape = np.array([1, 0, 0, 0, 1])
+            in_seq = np.zeros((nb_samples, seq_len))
+            out_seq = np.zeros((nb_samples, seq_len))
+            for i in range(nb_samples):
+                bg_color = random.choice(bg_colors)
+                in_seq[i] = np.full((seq_len,), bg_color)
+                out_seq[i] = np.full((seq_len,), bg_color)
+                offset = 0
+                while 1 : 
+                    fig_color = random.choice(figure_colors)
+                    filling = figure_to_filling_color[fig_color]
+                    fig_in = fig_shape.copy() * fig_color
+                    fig_out = fig_in.copy()
+                    fig_out[1:-1] = filling
+                    fig_in[1:-1] = bg_color
+                    offset += random.randint(1, seq_len // 5)
+                    if offset < seq_len - fig_in.shape[0]:
+                        in_seq[i, offset:offset + fig_in.shape[0]] = fig_in
+                        out_seq[i, offset:offset + fig_in.shape[0]] = fig_out
+                        offset += len(fig_in)
+                    else:
+                        break
+            return [(i, o) for i, o in zip(in_seq, out_seq)]
+    raise ValueError("Unknown task")
 
 def get_arc_puzzle_ds_as_flat_ds(
     puzzle_name : PuzzleNames,
@@ -114,10 +156,18 @@ def get_arc_puzzle_ds_as_flat_ds(
     return res
 
 
-get_arc_puzzle_ds_as_flat_ds(
-    PuzzleNames.FILL_SIMPLE_OPENED_SHAPE,
-    nb_samples=10,
-    max_field_width=40,
-    pad_token_id=16,
-    ignore_label_id=16
-)
+# get_arc_puzzle_ds_as_flat_ds(
+#     PuzzleNames.FILL_SIMPLE_OPENED_SHAPE,
+#     nb_samples=10,
+#     max_field_width=40,
+#     pad_token_id=16,
+#     ignore_label_id=16
+# )
+
+# res = get_ds_arc_for_1d(
+#     seq_len=20,
+#     nb_samples=30,
+#     nb_cls=10,
+#     task='fill_between_pieces'
+# )
+# print(res)

@@ -5,7 +5,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 from gen_simple_arc_ds import gen_arc_puzzle_ex, PuzzleNames
-from get_ds_for_task import get_ds_for_simple_input_output_flat_seuqences, get_ds_for_masked_modeling_only_answer, get_ds_for_masked_modeling_only_answer_only_foreground_items
+from get_ds_for_task import get_ds_1d_seq_for_random_input_with_some_transformation_for_output, get_ds_for_masked_modeling_only_answer, get_ds_for_masked_modeling_only_answer_only_foreground_items
 
 class SimpleDataset(Dataset):
     def __init__(self, data):
@@ -544,7 +544,7 @@ def get_dataloaders_for_flat_seq_cls(
 
 
 def ex3():
-    ds_raw = get_ds_for_simple_input_output_flat_seuqences(
+    ds_raw = get_ds_1d_seq_for_random_input_with_some_transformation_for_output(
         seq_len = 32, 
         nb_samples = 100,
         nb_cls = 10,
@@ -575,7 +575,138 @@ def ex3():
         print(batch)
         break
 
+
+
+
+
+
+
+def get_dataloaders_for_2d_full_pred(
+    ds_raw : List[Tuple[np.ndarray, np.ndarray]],
+    ignore_label_id : int,
+    pad_token_id : int,
+    split_ratio : float,
+    batch_size_train : int,
+    batch_size_eval : int,
+    max_grid_width : int,
+    device : str
+) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
+    def sample_as_input_output_pair(inp : torch.Tensor, l : torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor] :
+        i_field = torch.full((max_grid_width * 2, max_grid_width), pad_token_id, dtype=torch.long)
+        l_field = torch.full((max_grid_width * 2, max_grid_width), ignore_label_id, dtype=torch.long)
+        # print(inp.shape, l.shape)
+        i_field[:inp.shape[0], :inp.shape[1]] = inp
+        l_field[max_grid_width:max_grid_width + l.shape[0], :l.shape[1]] = l
+        return i_field, l_field
+
+    def get_as_input_and_labels_pairs() -> List[Tuple[torch.Tensor, torch.Tensor]] :
+        res = []
+        for i, l in ds_raw :
+            res.append(sample_as_input_output_pair(
+                torch.tensor(i, dtype=torch.long),
+                torch.tensor(l, dtype=torch.long),
+            ))
+        return res
+    
+    def collate_fn(
+        batch : List[Tuple[torch.Tensor, torch.Tensor]],
+    ) -> Dict[str, torch.Tensor] :
+        B = len(batch)
+        max_h = max_grid_width * 2
+        max_w = max_grid_width
+        input_ids_base : torch.Tensor = torch.full((B, max_h, max_w), pad_token_id, dtype=torch.long)
+        labels_base = torch.full((B, max_h, max_w), ignore_label_id, dtype=torch.long) # padding labels and ignore labels is literally the same because loss function will treat them equally
+
+        for i, (token_ids, labels) in enumerate(batch):
+            h, w = token_ids.shape
+            input_ids_base[i, :h, :w] = token_ids
+            labels_base[i, :h, :w] = labels
+
+        return {
+            "input_ids": input_ids_base.to(device),
+            "labels": labels_base.to(device)
+        }
+
+
+    ds_torch = get_as_input_and_labels_pairs()
+
+    dataset = SimpleDataset(ds_torch)
+
+    # Create train/validation split
+    train_size = int(split_ratio * len(dataset))
+    val_size = len(dataset) - train_size
+    train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
+    # print(len(train_dataset), len(val_dataset))
+    # Create dataloaders with custom collate function
+    train_dataloader = DataLoader(
+        train_dataset,
+        batch_size=batch_size_train,
+        shuffle=True,
+        collate_fn=collate_fn
+    )
+
+    val_dataloader = DataLoader(
+        val_dataset,
+        batch_size=batch_size_eval,
+        shuffle=False,
+        collate_fn=collate_fn
+    )
+
+    return train_dataloader, val_dataloader
+
+
+def ex4() :
+    def plot_batch_data(
+        batch : Dict[str, torch.Tensor]
+    ) -> None:
+        input_ids = batch["input_ids"]
+        labels = batch["labels"]
+        B, H, W = input_ids.shape
+        MAX_COLOR = 30
+        # input_ids (B, H, W)
+        fig, axs = plt.subplots(2, B, figsize=(6, 12))
+        for i in range(B):
+            axs[0, i].imshow(input_ids[i], cmap='tab20', vmin=0, vmax=MAX_COLOR)
+            axs[0, i].set_title(f'Input ids')
+
+            axs[1, i].imshow(labels[i], cmap='tab20', vmin=0, vmax=MAX_COLOR)
+            axs[1, i].set_title(f'Actual labels')
+
+        plt.show()
+        
+    ds_raw = gen_arc_puzzle_ex(
+        name = PuzzleNames.FILL_SIMPLE_OPENED_SHAPE,
+        nb_examples = 100,
+        augment_colors = False,
+        do_shuffle = False
+    )
+    ignore_label_id = -100
+    pad_token_id = 102
+    split_ratio = 0.8
+    batch_size_train = 4
+    batch_size_eval = 2
+    device = "cpu"
+
+    train_dl, val_dl = get_dataloaders_for_2d_full_pred(
+        ds_raw,
+        ignore_label_id,
+        pad_token_id,
+        split_ratio,
+        batch_size_train,
+        batch_size_eval,
+        max_grid_width=40,
+        device=device
+    )
+
+    for batch in train_dl:
+        # print(batch)
+        plot_batch_data(batch)
+        break
+
+
+
 if __name__ == "__main__":
     # ex1()
     # ex2()
-    ex3()
+    # ex3()
+    ex4()
