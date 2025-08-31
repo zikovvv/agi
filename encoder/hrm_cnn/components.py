@@ -209,9 +209,11 @@ class TransformerBlockHRM(nn.Module):
             max_position_embeddings = self.cfg.max_len,
             base = self.cfg.rope_theta
         )
-        self.rope_cos, self.rope_sin = self.rotary_emb()
-        self.register_buffer('rope_cos', self.rope_cos, persistent=False)
-        self.register_buffer('rope_sin', self.rope_sin, persistent=False)
+        rope_cos, rope_sin = self.rotary_emb()
+        self.register_buffer('rope_cos', rope_cos, persistent=False)
+        self.register_buffer('rope_sin', rope_sin, persistent=False)
+        self.rope_sin : torch.Tensor
+        self.rope_cos : torch.Tensor
 
         self.self_attn = Attention(
             hidden_size=cfg.d_model,
