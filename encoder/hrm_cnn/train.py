@@ -176,7 +176,7 @@ def main(
         seed=123,
         val_frac=0.1,
         test_frac=0.0,
-        num_samples=20,
+        num_samples=200,
         seq_len=30,
         max_width=40
     ) if dcfg is None else dcfg
@@ -188,10 +188,12 @@ def main(
         d_model=64,
         n_head=4,
         num_layers=1,
-        nb_refinement_steps=8,
+        nb_refinement_steps=5,
         dim_feedforward=256,
         vocab_size=200,
-        max_len=4000
+        max_len=4000,
+        enable_cnn_feature_extractor=False,
+        grad_only_on_last_refinement_step=True
     ) if mcfg is None else mcfg
 
     # device = tcfg.device
@@ -221,6 +223,7 @@ def main(
     train_dl, val_dl = get_train_val_dls()
     epoch = 0
     best_val_loss = float("inf")
+    current_date = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     while True :
         tr = train_one_epoch(model, train_dl, optimizer)
         l  = f"Epoch {epoch:02d} | "
@@ -235,11 +238,10 @@ def main(
             best_val_loss = va['loss']
             log(f"New best validation loss: {best_val_loss:.4f}")
             # save checkpoint
-            current_date = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            loss_string_no_comma = f'{best_val_loss:.4f}'.replace(',', '')
+            loss_string_no_comma = f'{best_val_loss:.4f}'.replace(',', '_').replace('.', '_')
             # ensure path exists
-            os.makedirs(f'./best_models/', exist_ok=True)
-            torch.save(model.state_dict(), f'./best_models/{current_date}_{loss_string_no_comma}.pth')
+            os.makedirs(f'./checkpoints/{current_date}', exist_ok=True)
+            torch.save(model.state_dict(), f'./checkpoints/{current_date}/{loss_string_no_comma}.pth')
         for k, v in va.items() : 
             l += f"{k} {v:.4f} | "
         log(f"{l}")

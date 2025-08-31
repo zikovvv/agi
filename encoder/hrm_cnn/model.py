@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from encoder.hrm_cnn.components import TransformerBlockHRM
+from encoder.hrm_cnn.components import TransformerBlockHRM, trunc_normal_init_
 from encoder.hrm_cnn.config import EncoderConfig
 
 class EncoderModel(nn.Module):
@@ -27,20 +27,26 @@ class EncoderModel(nn.Module):
         self.encoder = nn.Sequential(
             *[TransformerBlockHRM(self.cfg) for _ in range(self.cfg.num_layers)]
         )
-        
     def forward(
         self,
         input_ids: torch.Tensor,        # [B, L]
     ) -> torch.Tensor:
-        # print(input_ids.shape)
-        # exit()
-        # x = self.token_embed(input_ids)  # [B,L,D]
-        # x = self.embed_ln(x)
-        x = input_ids
-        h = self.encoder(x)
+        h : torch.Tensor = torch.zeros_like(input_ids, dtype=torch.float32)  # [B, L, D]
         if self.cfg.nb_refinement_steps > 1:
-            for i in range(self.cfg.nb_refinement_steps - 1):
-                h = self.encoder(h)
+            with torch.set_grad_enabled(not self.cfg.grad_only_on_last_refinement_step):
+                h = self.encoder(h + input_ids)
+                for _ in range(self.cfg.nb_refinement_steps - 1 - (1 if self.cfg.grad_only_on_last_refinement_step else 0)):
+                    h = self.encoder(h)
+            if self.cfg.grad_only_on_last_refinement_step:
+                # assert no grads everywhere
+                # for param in self.encoder.parameters():
+                #     assert param.grad is None
+                assert h.grad is None
+                assert input_ids.grad is None
+            h = self.encoder(h + input_ids)
+
+        else :
+            h = self.encoder(h + input_ids)
         return h
 
 
@@ -48,8 +54,6 @@ class CNNFeatureExtractor(nn.Module):
     def __init__(self, cfg: EncoderConfig):
         super().__init__()
         self.cfg = cfg
-        self.tok_embeddings = nn.Embedding(cfg.vocab_size, cfg.d_model)
-        nn.init.normal_(self.tok_embeddings.weight, mean=0.0, std=0.02)
 
         self.encoder = nn.Sequential(
             nn.Conv2d(cfg.d_model, cfg.d_model, kernel_size=3, padding=1),
@@ -61,9 +65,9 @@ class CNNFeatureExtractor(nn.Module):
         )
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.tok_embeddings(x)
         x = x.permute(0, 3, 1, 2)  # [B, D, H, W]
         x = self.encoder(x)
+        x = x.permute(0, 2, 3, 1)  # [B, H, W, D]
         return x
 
 class EncoderForCLSWithCNNFeatureExtraction(nn.Module):
@@ -77,19 +81,23 @@ class EncoderForCLSWithCNNFeatureExtraction(nn.Module):
         self.feature_extractor = CNNFeatureExtractor(cfg)
         self.encoder = EncoderModel(cfg)
         self.lm_head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=True)
-        
+        self.tok_embeddings = nn.Embedding(cfg.vocab_size, cfg.d_model)
+        nn.init.normal_(self.tok_embeddings.weight, mean=0.0, std=0.02)
+
     def forward(
         self,
         input_ids: torch.Tensor,        # [B, H, W]
         labels: torch.Tensor,           # [B, H, W], -100 to ignore
     ) -> Dict[str, torch.Tensor]:
         B, H, W, D = (*input_ids.size(), self.cfg.d_model)
-        features : torch.Tensor = self.feature_extractor(input_ids)  # [B, D, H, W]
-        features = features.permute(0, 2, 3, 1)  # [B, H, W, D]
-        assert features.shape == (B, H, W, D)
-        h = features.view(B, -1, D) # [B, H*W, D]
-        assert h.shape == (B, H * W, D)
-
+        embs = self.tok_embeddings(input_ids)
+        if self.cfg.enable_cnn_feature_extractor:
+            features : torch.Tensor = self.feature_extractor(embs)  # [B, H, W, D]
+            assert features.shape == (B, H, W, D)
+            h = features.view(B, -1, D) # [B, H*W, D]
+            assert h.shape == (B, H * W, D)
+        else :
+            h = embs.view(B, -1, D)  # [B, H*W, D]
         h : torch.Tensor = self.encoder(h)  # [B,H*W,D]
         logits : torch.Tensor = self.lm_head(h)     # [B,H*W,V]
         assert logits.shape == (B, H * W, self.cfg.vocab_size)

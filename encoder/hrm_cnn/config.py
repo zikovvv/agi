@@ -10,6 +10,8 @@ class EncoderConfig:
     n_head: int = 8
     num_layers: int = 2
     nb_refinement_steps: int = 8
+    grad_only_on_last_refinement_step : bool = False
+    enable_cnn_feature_extractor : bool = True
     dim_feedforward: int = 1024
     dropout: float = 0.1
     norm_first: bool = True
