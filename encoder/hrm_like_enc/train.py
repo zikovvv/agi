@@ -4,7 +4,7 @@ import tqdm
 from encoder.hrm_like_enc.config import DatasetConfig, TrainConfig, EncoderConfig            
 from gen_simple_arc_ds import PuzzleNames
 from get_dataloader_for_model_for_task import get_dataloaders_for_flat_seq_cls, get_dataloaders_for_encoder_masked_modeling
-from get_ds_for_task import get_arc_puzzle_ds_as_flat_ds, get_ds_1d_seq_for_random_input_with_some_transformation_for_output, get_ds_arc_for_1d, get_ds_for_masked_modeling_only_answer, get_ds_for_masked_modeling_only_answer_only_foreground_items
+from get_ds_for_task import get_arc_puzzle_ds_as_flat_ds, get_ds_1d_seq_for_random_input_with_some_transformation_for_output, get_custom_ds_arc, get_ds_for_masked_modeling_only_answer, get_ds_for_masked_modeling_only_answer_only_foreground_items
 from model import *
 import math
 from dataclasses import dataclass
@@ -88,9 +88,9 @@ def plot_eval_batch(
     """
     max_field_area = max_field_width * max_field_width
     q_field_seq = input_ids[:, :max_field_area]
-    l_field_seq = labels[:, max_field_area + 1 :]
-    p_field_seq = labels_predicted[:, max_field_area + 1 :]
-    
+    l_field_seq = labels[:, max_field_area:]
+    p_field_seq = labels_predicted[:, max_field_area:]
+
     q_field = q_field_seq.view(q_field_seq.shape[0], max_field_width, max_field_width)
     l_field = l_field_seq.view(l_field_seq.shape[0], max_field_width, max_field_width)
     p_field = p_field_seq.view(p_field_seq.shape[0], max_field_width, max_field_width)
@@ -179,28 +179,30 @@ def main(
     tcfg : Optional[TrainConfig] = None,
     mcfg : Optional[EncoderConfig] = None,
 ):
+    field_width = 20
+    seq_len = -100
     dcfg = DatasetConfig(
         seed=123,
         val_frac=0.1,
         test_frac=0.0,
-        num_samples=300,
-        seq_len=120,
-        max_width=40
+        num_samples=500,
+        seq_len=seq_len,
+        max_width=field_width
     ) if dcfg is None else dcfg
     tcfg = TrainConfig(
         batch_size=8,
         lr=3e-4
     ) if tcfg is None else tcfg
-    field_width = 15
     mcfg = EncoderConfig(
-        d_model=128,
+        d_model=64,
         n_head=8,
         d_head=32,
-        num_layers=2,
+        num_layers=1,
         nb_refinement_steps=1,
         dim_feedforward=256,
         vocab_size=200,
         max_len=4000,
+        
         use_transposed_rope_for_2d_vertical_orientation=False,
         field_width_for_t_rope=field_width,
         field_height_for_t_rope=field_width * 2,
@@ -211,14 +213,14 @@ def main(
     optimizer = _get_optimizer(model, tcfg)
     atexit.register(get_cleanup_function(model, optimizer=optimizer))
     
-    ds_raw = get_ds_arc_for_1d(
+    ds_raw = get_custom_ds_arc(
         seq_len=dcfg.seq_len,
         nb_samples=dcfg.num_samples,
         nb_cls=10,
-        task='fill_between_pieces_with_color_from_example',
-        do_2d = True,
+        task='fill_squares_2d',
+        # do_2d = True,
         field_width = field_width,
-        do_transpose = True,
+        # do_transpose = True,
     )
     # ds_raw = get_arc_puzzle_ds_as_flat_ds(
     #     puzzle_name=PuzzleNames.FILL_SIMPLE_OPENED_SHAPE,
@@ -249,7 +251,7 @@ def main(
         
         l  = f"Epoch {epoch:02d} | "
         with torch.no_grad():
-            va = evaluate(model, val_dl, show_nb_first_preds=0, max_field_width=dcfg.max_width)
+            va = evaluate(model, val_dl, show_nb_first_preds=2, max_field_width=dcfg.max_width)
         for k, v in va.items() : 
             l += f"{k} {v:.4f} | "
         log(f"{l}")

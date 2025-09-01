@@ -6,7 +6,7 @@ import tqdm
 from encoder.hrm_cnn.config import DatasetConfig, TrainConfig, EncoderConfig            
 from gen_simple_arc_ds import PuzzleNames, gen_arc_puzzle_ex
 from get_dataloader_for_model_for_task import get_dataloaders_for_2d_full_pred, get_dataloaders_for_flat_seq_cls, get_dataloaders_for_encoder_masked_modeling
-from get_ds_for_task import get_arc_puzzle_ds_as_flat_ds, get_ds_1d_seq_for_random_input_with_some_transformation_for_output, get_ds_arc_for_1d, get_ds_for_masked_modeling_only_answer, get_ds_for_masked_modeling_only_answer_only_foreground_items
+from get_ds_for_task import get_arc_puzzle_ds_as_flat_ds, get_ds_1d_seq_for_random_input_with_some_transformation_for_output, get_custom_ds_arc, get_ds_for_masked_modeling_only_answer, get_ds_for_masked_modeling_only_answer_only_foreground_items
 from model import *
 import math
 from dataclasses import dataclass

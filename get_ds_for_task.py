@@ -80,13 +80,14 @@ def get_ds_1d_seq_for_random_input_with_some_transformation_for_output(
 
 
 
-def get_ds_arc_for_1d(
+def get_custom_ds_arc(
     seq_len : int,
     nb_samples : int,
     nb_cls : int,
     task: Literal[
         'fill_between_pieces',
-        'fill_between_pieces_with_color_from_example'
+        'fill_between_pieces_with_color_from_example',
+        'fill_squares_2d'
     ],
     **kwargs,
 ) -> List[Tuple[np.ndarray, np.ndarray]] :
@@ -121,7 +122,7 @@ def get_ds_arc_for_1d(
                     else:
                         break
             return [(i, o) for i, o in zip(in_seq, out_seq)]
-        case 'fill_between_pieces_with_color_from_example':
+        case 'fill_between_pieces_with_color_from_example': 
             do_2d = False
             if 'do_2d' in kwargs :
                 do_2d = True
@@ -162,6 +163,122 @@ def get_ds_arc_for_1d(
                     in_seq[i] = in_seq[i].reshape(field_width, field_width).T.flatten()
                     out_seq[i] = out_seq[i].reshape(field_width, field_width).T.flatten()
             return [(i, o) for i, o in zip(in_seq, out_seq)]
+        case 'fill_squares_2d' :
+            seq_len = kwargs.get('field_width', None) # type: ignore
+            assert seq_len is not None, "field_width must be specified"
+            def get_np_square(size: int) : 
+                top_line = np.array([1] * size)
+                middle = np.array([1] + [0] * (size - 2) + [1])
+                return np.vstack([top_line, *(middle for _ in range(size - 2)), top_line])
+
+            def fill_shape(shape, color, bg_color) :
+                # shape is 1 for borders and 0 in the middle
+                filled_shape = shape.copy()
+                filled_shape[shape == bg_color] = color
+                return filled_shape
+            
+            def add_example_color_to_shape_in_random_place(shape, example_color, bg_color):
+                # pick a random point where color is bg_color
+                empty_positions = np.argwhere(shape == bg_color)
+                if empty_positions.size > 0:
+                    pos = random.choice(empty_positions)
+                    shape[tuple(pos)] = example_color
+                return shape
+
+            def get_next_pos_for_shape(fig_width, taken_coords) :
+                # randomly choose coords until find free space
+        
+                def overlap(a1, a2, b1, b2) :
+                    assert a1 < a2
+                    assert b1 < b2
+                    # l = [a1, a2, b1, b2]
+                    # l.sort()
+                    return (a1 <= b1 <= a2 <= b2) or \
+                            (a1 <= b1 <= b2 <= a2) or \
+                            (b1 <= a1 <= a2 <= b2) or \
+                            (b1 <= a1 <= b2 <= a2)
+
+                for trial in range(3) :
+                    x, y = random.randint(0, seq_len - fig_width), random.randint(0, seq_len - fig_width)
+                    if not taken_coords :
+                        return x, y
+                    # else :
+                        # print(taken_coords)
+                    ov = False
+                    for (x_taken, y_taken), fig_w in taken_coords :
+                        # print(fig_w, fig_width)
+                        x_overlap : bool = overlap(x, x + fig_width, x_taken, x_taken + fig_w)
+                        y_overlap : bool = overlap(y, y + fig_width, y_taken, y_taken + fig_w)
+                        if x_overlap and y_overlap :
+                            ov = True
+                            break
+                    if not ov :
+                        return x, y
+
+                return None, None
+                # raise ValueError("No valid position found")
+
+            fig_shapes = [
+                # get_np_square(3),
+                get_np_square(4),
+                get_np_square(5),
+                get_np_square(6),
+            ]
+            # bg_colors = [0, 4, 6, 9]/
+            # figure_colors = [1, 2, 3, 5, 7]
+            bg_colors = list(range(1, 10))
+            figure_colors = list(range(1, 10))
+
+            # print(f'{fig_shapes = }')
+            res = []
+            for i in range(nb_samples):
+                # print(i)
+                taken_coords : List[Tuple[Tuple[int, int], int]] = []# (x, y), fig_w
+                bg_color = random.choice(bg_colors)
+                in_field = np.full((seq_len, seq_len), bg_color)
+                out_field = np.full((seq_len, seq_len), bg_color)
+                in_f_copy = in_field.copy()
+                offset = 0
+                while 1 : 
+                    while 1 :
+                        fig_color = random.choice(figure_colors)
+                        if fig_color != bg_color:
+                            break
+                    assert fig_color != bg_color
+                    filling = random.choice(figure_colors)
+                    fig_shape = random.choice(fig_shapes)
+                    fig_width = fig_shape.shape[0]
+
+                    fig_in = fig_shape.copy() * fig_color
+                    assert fig_in[0][0] != bg_color
+                    
+                    fig_in = add_example_color_to_shape_in_random_place(fig_in, filling, 0)
+                    assert fig_in[0][0] != bg_color
+                    
+                    fig_in = fill_shape(fig_in, bg_color, 0)
+                    assert fig_in[0][0] != bg_color
+                    
+                    
+                    fig_out = fig_in.copy()
+                    fig_out = fill_shape(fig_out, filling, bg_color)
+                    assert fig_out[0][0] == fig_in[0][0] 
+                    assert fig_out[0][0] != bg_color
+                    assert fig_in[0][0] != bg_color
+                    assert fig_in[0][0] != in_f_copy[0][0]
+                    assert fig_out[0][0] != in_f_copy[0][0]
+                    
+                    newx, newy = get_next_pos_for_shape(fig_width, taken_coords)
+                    if newx is not None  and newy is not None:
+                        taken_coords.append(((newx, newy), fig_width))
+                        in_field[newx:newx + fig_width, newy:newy + fig_width] = fig_in
+                        out_field[newx:newx + fig_width, newy:newy + fig_width] = fig_out
+                    else :
+                        break
+                res.append((in_field.flatten(), out_field.flatten()))
+            return res
+            
+            
+            
     raise ValueError("Unknown task")
 
 def get_arc_puzzle_ds_as_flat_ds(
@@ -208,25 +325,27 @@ def get_arc_puzzle_ds_as_flat_ds(
 #     ignore_label_id=16
 # )
 
-res = get_ds_arc_for_1d(
-    seq_len=20,
-    nb_samples=30,
-    nb_cls=10,
-    task='fill_between_pieces_with_color_from_example',
-    do_2d = True,
-    field_width = 15,
-    do_transpose = True
-)
-# def print_fields(q, a) :
-#     q_f, a_f = q.reshape(15, 15), a.reshape(15, 15)
-#     plt.subplot(1, 2, 1)
-#     plt.imshow(q_f, aspect='auto')
-#     plt.title("Input")
-#     plt.subplot(1, 2, 2)
-#     plt.imshow(a_f, aspect='auto')
-#     plt.title("Output")
-#     plt.show()
-# print(res)
-# for r in res[:4] :
-#     print(r)
-#     print_fields(*r)
+if 0 :
+    w = 20
+    res = get_custom_ds_arc(
+        seq_len=w,
+        nb_samples=30,
+        nb_cls=10,
+        task='fill_squares_2d',
+        # do_2d = True,
+        field_width = w,
+        # do_transpose = True
+    )
+    def print_fields(q, a) :
+        q_f, a_f = q.reshape(w, w), a.reshape(w, w)
+        plt.subplot(1, 2, 1)
+        plt.imshow(q_f, aspect='auto')
+        plt.title("Input")
+        plt.subplot(1, 2, 2)
+        plt.imshow(a_f, aspect='auto')
+        plt.title("Output")
+        plt.show()
+        
+    for q, a in res[:3]:
+        # print(q)
+        print_fields(q, a)

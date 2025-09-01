@@ -278,16 +278,16 @@ class TransformerBlockHRM(nn.Module):
     ) -> None:
         super().__init__()
         self.cfg = cfg
-        # self.rotary_emb = RotaryEmbedding(
-        #     dim = self.cfg.d_head,
-        #     max_position_embeddings = self.cfg.max_len,
-        #     base = self.cfg.rope_theta
-        # )
-        self.rotary_emb = LearnedROPE(
-            dim=self.cfg.d_head,
-            max_position_embeddings=self.cfg.max_len,
-            base=self.cfg.rope_theta
+        self.rotary_emb = RotaryEmbedding(
+            dim = self.cfg.d_head,
+            max_position_embeddings = self.cfg.max_len,
+            base = self.cfg.rope_theta
         )
+        # self.rotary_emb = LearnedROPE(
+        #     dim=self.cfg.d_head,
+        #     max_position_embeddings=self.cfg.max_len,
+        #     base=self.cfg.rope_theta
+        # )
         # self.rope_cos, self.rope_sin = self.rotary_emb()
         # self.register_buffer('rope_cos', self.rope_cos, persistent=False)
         # self.register_buffer('rope_sin', self.rope_sin, persistent=False)
