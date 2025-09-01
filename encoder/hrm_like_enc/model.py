@@ -41,7 +41,7 @@ class EncoderModel(nn.Module):
         assert self.cfg.nb_last_trained_steps > 0
         assert self.cfg.nb_last_trained_steps <= self.cfg.nb_refinement_steps
         nb_steps_no_grad = self.cfg.nb_refinement_steps - self.cfg.nb_last_trained_steps
-        h = np.zeros_like(inps)
+        h = torch.zeros_like(inps)
         with torch.no_grad():
             for i in range(nb_steps_no_grad):
                 h = self.encoder(h + inps)

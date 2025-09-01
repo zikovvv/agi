@@ -198,7 +198,7 @@ def main(
         n_head=8,
         d_head=32,
         num_layers=1,
-        nb_refinement_steps=1,
+        nb_refinement_steps=2,
         nb_last_trained_steps=1,
         dim_feedforward=256,
         vocab_size=200,
