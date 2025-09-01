@@ -45,7 +45,7 @@ def transform_tensor(
     inverse: bool = False
 ) -> torch.Tensor: 
     assert len(colors) == len(perm)
-    ip = ids.clone()
+    ip = ids.clone().to(ids.device)
     for new_color, old_color in zip(*((colors, perm) if inverse else (perm, colors))):
         ip[ids == old_color] = new_color
     return ip
@@ -118,16 +118,19 @@ def augmented_inference_batched_with_voting(
     pad_token_id : int,
     debug: bool = False
 ):
+    device = input_ids.device
     log_debug(f'{input_ids.shape = }, {labels.shape = }, {ignore_label_id = }')
     small_batch_size = input_ids.shape[0]
     colors_orig, colors_perms, input_ids_p, labels_p = augment_colors_batch(
-        input_ids,
-        labels,
+        input_ids.cpu(),
+        labels.cpu(),
         max_permutations=20,
         ignore_label_id=ignore_label_id,
         pad_token_id=pad_token_id,
         add_orig=False
     )
+    input_ids_p = input_ids_p.to(device)
+    labels_p = labels_p.to(device)
     log_debug(f'{input_ids_p.shape = }, {labels_p.shape = }, {len(colors_orig) = }, {len(colors_perms) = }')
     res = model(input_ids_p, labels=labels_p)
     loss = res['loss'].item()

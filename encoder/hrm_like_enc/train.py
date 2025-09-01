@@ -21,7 +21,6 @@ from datasets import Dataset
 import torch
 from torch import nn
 import matplotlib.pyplot as plt
-
 from show import plot_eval_batch
 
 
@@ -31,6 +30,7 @@ def train_one_epoch(
     model: nn.Module,
     loader: DataLoader,
     optimizer: torch.optim.Optimizer,
+    device : str = 'cpu',
 ) -> Dict[str, float]:
     ignored_id: int = model.cfg.ignore_id  # type: ignore
     pad_token_id: int = model.cfg.pad_token_id  # type: ignore
@@ -78,69 +78,20 @@ def train_one_epoch(
 
 
 
-import matplotlib.pyplot as plt
-import numpy as np
-import torch
-
-# def plot_eval_batch(
-#     to_show : List[torch.Tensor],
-#     max_field_width : int = 40,
-#     *,
-#     max_color: int = 30,
-#     cmap: str = "tab20",
-#     cell_inches: float = 2.0,      # size of each small image (inches)
-#     dpi: int = 200,                # higher -> sharper
-#     show_row_labels: bool = True,  # overlay row labels instead of titles (no extra space)
-# ) -> None:
-#     """
-#     4 x B grid with NO whitespace.
-#     Rows: [Input ids, Actual labels, Predicted labels, Predicted on inputs]
-#     Columns: all batch elements.
-#     """
-#     max_field_area = max_field_width * max_field_width
-#     for a in to_show :
-#         print(a.shape)
-#     fields = [
-#         f.view(f.shape[0], max_field_width, max_field_width) for f in to_show
-#     ]
-
-#     B, H, W = fields[0].shape
-#     nrows, ncols = len(to_show), B
-#     fig = plt.figure(figsize=(cell_inches * ncols, cell_inches * nrows), dpi=dpi)
-#     gs = fig.add_gridspec(nrows, ncols, wspace=0.0, hspace=0.0)
-
-#     # Helper to render one small image without axes chrome
-#     def _show(ax, arr):
-#         # Ensure numpy
-#         if isinstance(arr, torch.Tensor):
-#             arr = arr.detach().cpu().numpy()
-#         ax.imshow(arr, cmap=cmap, vmin=0, vmax=max_color, interpolation="nearest")
-#         ax.set_axis_off()
-#         # Keep pixels square & tight
-#         ax.set_aspect("equal", adjustable="box")
-
-#     # Fill grid
-#     for j in range(ncols):
-#         for i in range(nrows) :
-#             _show(fig.add_subplot(gs[i, j]), fields[i][j])
-
-#     # Absolutely no outer padding
-#     fig.subplots_adjust(left=0, right=1, top=1, bottom=0, wspace=0, hspace=0)
-
-#     plt.show()
-
 @torch.no_grad()
 def evaluate(
     model: nn.Module,
     loader: DataLoader,
     max_field_width : int,
-    show_nb_first_preds : int
+    show_nb_first_preds : int,
+    device : str = 'cpu',
 ) -> Dict[str, float]:
     def simple_inference(
         input_ids: torch.Tensor,
         labels: torch.Tensor,
     ) :
         with torch.no_grad():
+            input_ids, labels = input_ids.to(device), labels.to(device)
             res = model(input_ids, labels)
             logits = res['logits']
             loss = res['loss'].item()
@@ -175,7 +126,7 @@ def evaluate(
 
     showed = 0
     for it, batch in enumerate(loader):
-        input_ids, labels = batch['input_ids'], batch['labels']
+        input_ids, labels = batch['input_ids'].to(device), batch['labels'].to(device)
         # res = model(input_ids, labels)
         # loss = res['loss']
         # logits : torch.Tensor = res['logits']
@@ -355,7 +306,7 @@ def main(
     )
     epoch = 0
     while 1 :
-        tr = train_one_epoch(model, train_dl, optimizer)
+        tr = train_one_epoch(model, train_dl, optimizer, device = tcfg.device)
         l  = f"Epoch {epoch:02d} | "
         for k, v in tr.items() : 
             l += f"{k} {v:.4f} | "
@@ -363,7 +314,7 @@ def main(
         
         l  = f"Epoch {epoch:02d} | "
         with torch.no_grad():
-            va = evaluate(model, val_dl, show_nb_first_preds=1, max_field_width=dcfg.max_width)
+            va = evaluate(model, val_dl, show_nb_first_preds=1, max_field_width=dcfg.max_width, device = tcfg.device)
         for k, v in va.items() : 
             l += f"{k} {v:.4f} | "
         log(f"{l}")
