@@ -463,7 +463,6 @@ def ex2() :
 
 def get_dataloaders_for_flat_seq_cls(
     ds_raw : List[Tuple[np.ndarray, np.ndarray]],
-    masked_token_id : int,
     ignore_label_id : int,
     sep_token_id : int,
     pad_token_id : int,
@@ -492,7 +491,7 @@ def get_dataloaders_for_flat_seq_cls(
             if add_sep:
                 input_ids[input_tensor.shape[0]] = sep_token_id
             # Fill masked tokens for output part
-            input_ids[input_tensor.shape[0] + sep_shift:] = masked_token_id
+            input_ids[input_tensor.shape[0] + sep_shift:] = pad_token_id
             # Set labels for output part only
             labels[input_tensor.shape[0] + sep_shift:] = output_tensor
             
@@ -564,7 +563,6 @@ def ex3():
 
     train_dl, val_dl = get_dataloaders_for_flat_seq_cls(
         ds_raw,
-        masked_token_id,
         ignore_label_id,
         sep_token_id,
         pad_token_id,

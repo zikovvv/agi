@@ -2,6 +2,7 @@ import atexit
 import json
 import tqdm
 from encoder.hrm_like_enc.config import DatasetConfig, TrainConfig, EncoderConfig            
+from encoder.hrm_like_enc.inference import augment_colors_batch, augmented_inference_batched, augmented_inference_batched_with_voting
 from gen_simple_arc_ds import PuzzleNames
 from get_dataloader_for_model_for_task import get_dataloaders_for_flat_seq_cls, get_dataloaders_for_encoder_masked_modeling
 from get_ds_for_task import get_arc_puzzle_ds_as_flat_ds, get_ds_1d_seq_for_random_input_with_some_transformation_for_output, get_custom_ds_arc, get_ds_for_masked_modeling_only_answer, get_ds_for_masked_modeling_only_answer_only_foreground_items
@@ -21,6 +22,8 @@ import torch
 from torch import nn
 import matplotlib.pyplot as plt
 
+from show import plot_eval_batch
+
 
 
 
@@ -30,6 +33,7 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
 ) -> Dict[str, float]:
     ignored_id: int = model.cfg.ignore_id  # type: ignore
+    pad_token_id: int = model.cfg.pad_token_id  # type: ignore
 
     model.train()
     total = 0
@@ -38,6 +42,15 @@ def train_one_epoch(
     total_classified = 0
     for batch in tqdm.tqdm(loader, total=len(loader)):
         input_ids, labels = batch['input_ids'], batch['labels']
+        colors_orig, colors_perms, input_ids, labels = augment_colors_batch(
+            input_ids,
+            labels,
+            max_permutations=5,
+            ignore_label_id=ignored_id,
+            pad_token_id=pad_token_id,
+            add_orig=True
+        )
+
         optimizer.zero_grad(set_to_none=True)
         res = model(input_ids, labels)
         # print(res)
@@ -69,58 +82,52 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-def plot_eval_batch(
-    input_ids: torch.Tensor,
-    labels: torch.Tensor,
-    labels_predicted: torch.Tensor,
-    max_field_width : int = 40,
-    *,
-    max_color: int = 30,
-    cmap: str = "tab20",
-    cell_inches: float = 2.0,      # size of each small image (inches)
-    dpi: int = 200,                # higher -> sharper
-    show_row_labels: bool = True,  # overlay row labels instead of titles (no extra space)
-) -> None:
-    """
-    4 x B grid with NO whitespace.
-    Rows: [Input ids, Actual labels, Predicted labels, Predicted on inputs]
-    Columns: all batch elements.
-    """
-    max_field_area = max_field_width * max_field_width
-    q_field_seq = input_ids[:, :max_field_area]
-    l_field_seq = labels[:, max_field_area:]
-    p_field_seq = labels_predicted[:, max_field_area:]
+# def plot_eval_batch(
+#     to_show : List[torch.Tensor],
+#     max_field_width : int = 40,
+#     *,
+#     max_color: int = 30,
+#     cmap: str = "tab20",
+#     cell_inches: float = 2.0,      # size of each small image (inches)
+#     dpi: int = 200,                # higher -> sharper
+#     show_row_labels: bool = True,  # overlay row labels instead of titles (no extra space)
+# ) -> None:
+#     """
+#     4 x B grid with NO whitespace.
+#     Rows: [Input ids, Actual labels, Predicted labels, Predicted on inputs]
+#     Columns: all batch elements.
+#     """
+#     max_field_area = max_field_width * max_field_width
+#     for a in to_show :
+#         print(a.shape)
+#     fields = [
+#         f.view(f.shape[0], max_field_width, max_field_width) for f in to_show
+#     ]
 
-    q_field = q_field_seq.view(q_field_seq.shape[0], max_field_width, max_field_width)
-    l_field = l_field_seq.view(l_field_seq.shape[0], max_field_width, max_field_width)
-    p_field = p_field_seq.view(p_field_seq.shape[0], max_field_width, max_field_width)
+#     B, H, W = fields[0].shape
+#     nrows, ncols = len(to_show), B
+#     fig = plt.figure(figsize=(cell_inches * ncols, cell_inches * nrows), dpi=dpi)
+#     gs = fig.add_gridspec(nrows, ncols, wspace=0.0, hspace=0.0)
 
-    B, H, W = q_field.shape
+#     # Helper to render one small image without axes chrome
+#     def _show(ax, arr):
+#         # Ensure numpy
+#         if isinstance(arr, torch.Tensor):
+#             arr = arr.detach().cpu().numpy()
+#         ax.imshow(arr, cmap=cmap, vmin=0, vmax=max_color, interpolation="nearest")
+#         ax.set_axis_off()
+#         # Keep pixels square & tight
+#         ax.set_aspect("equal", adjustable="box")
 
-    nrows, ncols = 3, B
-    fig = plt.figure(figsize=(cell_inches * ncols, cell_inches * nrows), dpi=dpi)
-    gs = fig.add_gridspec(nrows, ncols, wspace=0.0, hspace=0.0)
+#     # Fill grid
+#     for j in range(ncols):
+#         for i in range(nrows) :
+#             _show(fig.add_subplot(gs[i, j]), fields[i][j])
 
-    # Helper to render one small image without axes chrome
-    def _show(ax, arr):
-        # Ensure numpy
-        if isinstance(arr, torch.Tensor):
-            arr = arr.detach().cpu().numpy()
-        ax.imshow(arr, cmap=cmap, vmin=0, vmax=max_color, interpolation="nearest")
-        ax.set_axis_off()
-        # Keep pixels square & tight
-        ax.set_aspect("equal", adjustable="box")
+#     # Absolutely no outer padding
+#     fig.subplots_adjust(left=0, right=1, top=1, bottom=0, wspace=0, hspace=0)
 
-    # Fill grid
-    for j in range(ncols):
-        _show(fig.add_subplot(gs[0, j]), q_field[j])
-        _show(fig.add_subplot(gs[1, j]), l_field[j])
-        _show(fig.add_subplot(gs[2, j]), p_field[j])
-
-    # Absolutely no outer padding
-    fig.subplots_adjust(left=0, right=1, top=1, bottom=0, wspace=0, hspace=0)
-
-    plt.show()
+#     plt.show()
 
 @torch.no_grad()
 def evaluate(
@@ -129,36 +136,139 @@ def evaluate(
     max_field_width : int,
     show_nb_first_preds : int
 ) -> Dict[str, float]:
+    def simple_inference(
+        input_ids: torch.Tensor,
+        labels: torch.Tensor,
+    ) :
+        with torch.no_grad():
+            res = model(input_ids, labels)
+            logits = res['logits']
+            loss = res['loss'].item()
+            preds = logits.argmax(dim=-1)
+            return loss, preds
+            # nb_right  = (preds == labels).sum().item()
+            # nb_classified = (labels != ignored_id).sum().item()
+            # return loss, preds, logits, nb_right / nb_classified
+
     ignored_id: int = model.cfg.ignore_id  # type: ignore
+    pad_token_id: int = model.cfg.pad_token_id # type: ignore
     model.eval()
-    total = 0
+    total_steps = 0
+
+
     total_loss = 0.0
     total_correct = 0
-    total_classified = 0
-    
-    showed = 0
-    for batch in loader:
-        input_ids, labels = batch['input_ids'], batch['labels']
-        res = model(input_ids, labels)
-        loss = res['loss']
-        logits : torch.Tensor = res['logits']
-        preds = logits.argmax(dim=-1)
-        nb_corr_cur = (preds == labels).sum().item()
-        nb_masked = (labels != ignored_id).sum().item()
-        total_correct += nb_corr_cur
-        total_classified += nb_masked
-        
-        total_loss += loss.item() * input_ids.size(0)
+    total_labels = 0
 
-        total += input_ids.shape[0]
+    total_loss_1 = 0.0
+    total_correct_1 = 0
+    total_labels_1 = 0
+
+
+    total_labels_aug = 0
+    total_labels_vote = 0
+    total_loss_aug = 0.0
+
+    total_cor_vote = 0
+    total_cor_aug = 0
+
+
+    showed = 0
+    for it, batch in enumerate(loader):
+        input_ids, labels = batch['input_ids'], batch['labels']
+        # res = model(input_ids, labels)
+        # loss = res['loss']
+        # logits : torch.Tensor = res['logits']
+        # preds = logits.argmax(dim=-1)
+        # nb_corr_cur = (preds == labels).sum().item()
+        # nb_masked = (labels != ignored_id).sum().item()
+        # total_correct += nb_corr_cur
+        # total_classified += nb_masked
+        # log_debug(f'{input_ids.shape = }, {labels.shape = }, {ignored_id = }')
+        
+        
+        
+        
+        # loss, voted_preds, acc_global, acc_local = augmented_inference_batched_with_voting(
+        #     model = model,
+        #     input_ids = input_ids,
+        #     labels = labels,
+        #     ignore_label_id = ignored_id,
+        #     debug = it < show_nb_first_preds
+        # )
+        # acc_global_sum += acc_global
+        # acc_local_sum += acc_local
+        
+
+
+        # loss, preds = augmented_inference_batched(
+        #     model = model,
+        #     input_ids = input_ids,
+        #     labels = labels,
+        #     ignore_label_id = ignored_id,
+        #     pad_token_id = pad_token_id,
+        #     debug = it < show_nb_first_preds
+        # )
+        # nb_correct = (preds == labels).sum().item()
+        # nb_labels = (labels != ignored_id).sum().item()
+        # total_correct += nb_correct
+        # total_labels += nb_labels
+        # total_loss += loss
+
+
+        loss_1, preds_1 = simple_inference(
+            input_ids=input_ids,
+            labels=labels
+        )
+        nb_correct = (preds_1 == labels).sum().item()
+        nb_labels = (labels != ignored_id).sum().item()
+        total_correct_1 += nb_correct
+        total_labels_1 += nb_labels
+        total_loss_1 += loss_1
+
+        loss_aug, preds_voted, nb_labels_aug, nb_cor_aug, nb_labels_vote, nb_cor_voting = augmented_inference_batched_with_voting(
+            model = model,
+            input_ids = input_ids,
+            labels = labels,
+            ignore_label_id = ignored_id,
+            pad_token_id = pad_token_id,
+            debug = it < show_nb_first_preds
+        )
+        total_cor_aug += nb_cor_aug
+        total_labels_aug += nb_labels_aug
+        total_loss_aug += loss_aug
+
+        total_cor_vote += nb_cor_voting
+        total_labels_vote += nb_labels_vote
 
         if showed < show_nb_first_preds:
-            plot_eval_batch(input_ids, labels, preds, max_field_width=max_field_width) # type: ignore
+            field_area = max_field_width * max_field_width
+            plot_eval_batch(
+            [
+                input_ids[:10, :field_area],
+                labels[:10, field_area:],
+                # preds[:10, field_area:],
+                preds_1[:10, field_area:],
+                preds_voted[:10, field_area:]
+            ], max_field_width=max_field_width) # type: ignore
             showed += 1
 
-    avg_loss = total_loss / max(total, 1)
-    acc = total_correct / total_classified
-    return {"loss": avg_loss, "acc": acc}
+        total_steps += 1
+        
+        
+    acc = total_correct / max(total_labels, 1)
+    acc_1 = total_correct_1 / max(total_labels_1, 1)
+    acc_aug = total_cor_aug / max(total_labels_aug, 1)
+    acc_vote = total_cor_vote / max(total_labels_vote, 1)
+    return {
+        "loss":  total_loss / max(total_steps, 1),
+        "loss_1": total_loss_1 / max(total_steps, 1),
+        'loss_aug': total_loss_aug / max(total_steps, 1),
+        'acc': acc,
+        'acc_1': acc_1,
+        'acc_aug': acc_aug,
+        'acc_vote': acc_vote
+    }
 
 
 def _get_model(mcfg : EncoderConfig, tcfg : TrainConfig) -> EncoderForCLS :
@@ -172,20 +282,22 @@ def _get_optimizer(model : EncoderForCLS, tcfg : TrainConfig) :
     
 
 logger.remove() #remove the old handler. Else, the old one will work along with the new one you've added below'
+# logger.add(sys.stderr, level="DEBUG") 
 logger.add(sys.stderr, level="INFO") 
+
 
 def main(
     dcfg : Optional[DatasetConfig] = None,
     tcfg : Optional[TrainConfig] = None,
     mcfg : Optional[EncoderConfig] = None,
 ):
-    field_width = 20
+    field_width = 15
     seq_len = -100
     dcfg = DatasetConfig(
         seed=123,
         val_frac=0.1,
         test_frac=0.0,
-        num_samples=500,
+        num_samples=200,
         seq_len=seq_len,
         max_width=field_width
     ) if dcfg is None else dcfg
@@ -194,11 +306,11 @@ def main(
         lr=3e-4
     ) if tcfg is None else tcfg
     mcfg = EncoderConfig(
-        d_model=64,
+        d_model=128,
         n_head=8,
         d_head=32,
-        num_layers=1,
-        nb_refinement_steps=2,
+        num_layers=4,
+        nb_refinement_steps=1,
         nb_last_trained_steps=1,
         dim_feedforward=256,
         vocab_size=200,
@@ -232,7 +344,6 @@ def main(
     # )
     train_dl, val_dl = get_dataloaders_for_flat_seq_cls(
         ds_raw,
-        masked_token_id=mcfg.masked_token_id,
         ignore_label_id = mcfg.ignore_id,
         sep_token_id = mcfg.qa_sep_token_id,
         pad_token_id = mcfg.pad_token_id,
@@ -252,7 +363,7 @@ def main(
         
         l  = f"Epoch {epoch:02d} | "
         with torch.no_grad():
-            va = evaluate(model, val_dl, show_nb_first_preds=2, max_field_width=dcfg.max_width)
+            va = evaluate(model, val_dl, show_nb_first_preds=1, max_field_width=dcfg.max_width)
         for k, v in va.items() : 
             l += f"{k} {v:.4f} | "
         log(f"{l}")
@@ -264,3 +375,4 @@ def main(
 
 if __name__ == "__main__":
     main()
+    

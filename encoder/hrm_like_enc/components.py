@@ -224,6 +224,113 @@ class Attention(nn.Module):
         
 
     def forward(self, cos_sin: CosSin, hidden_states: torch.Tensor) -> torch.Tensor:
+        log_debug(f'{hidden_states.shape = }')
+        batch_size, seq_len, _ = hidden_states.shape
+
+        # hidden_states: [bs, seq_len, num_heads, head_dim]
+        qkv : torch.Tensor = self.qkv_proj(hidden_states)
+        log_debug(f'{qkv.shape = }')
+
+        # Split head
+        qkv = qkv.view(batch_size, seq_len, self.num_heads + 2 * self.num_key_value_heads, self.head_dim)
+        query = qkv[:, :, :self.num_heads]
+        key = qkv[:, :, self.num_heads: self.num_heads + self.num_key_value_heads]
+        value = qkv[:, :, self.num_heads + self.num_key_value_heads:]
+        log_debug(f'{qkv.shape = }, {query.shape = }, {key.shape = }, {value.shape = }')
+
+
+        q, k, v = self.apply_rope_and_permute(query, key, value, cos_sin[0], cos_sin[1])
+        log_debug(f'{q.shape = }, {k.shape = }, {v.shape = }')
+
+        attn = sdpa(q, k, v, attn_mask=None, is_causal=False)
+        log_debug(f'{attn.shape = }')
+        attn_output = attn.permute(0, 2, 1, 3)  # [B,S,H,D]
+        attn_output = attn_output.view(batch_size, seq_len, self.output_size)  # type: ignore
+        log_debug(f'{attn_output.shape = }')
+
+
+        if self.use_transposed_rope_for_2d_vertical_orientation:
+            q, k, v = self.apply_rope_and_permute(
+                query,
+                key,
+                value,
+                cos_sin[0], 
+                cos_sin[1],
+                transposed=True,
+                field_w=self.field_width_for_t_rope,
+                field_h=self.field_height_for_t_rope
+            )
+            attn_vertical = sdpa(q, k, v, attn_mask=None, is_causal=False)
+            attn_output_vertical = attn_vertical.permute(0, 2, 1, 3)  # [B,S,H,D]
+            attn_output_vertical = attn_output_vertical.view(batch_size, seq_len, self.output_size)  # type: ignore
+            attn_output = (attn_output + attn_output_vertical) / 2
+
+        return self.o_proj(attn_output)
+
+
+
+
+class Attention2DROPEAxial(nn.Module):
+    def __init__(
+        self,
+        cfg : EncoderConfig,
+        
+        # hidden_size,
+        # head_dim,
+        # num_heads,
+        # num_key_value_heads,
+        # use_transposed_rope_for_2d_vertical_orientation: bool = False,
+        # field_width_for_t_rope: int = 40,
+        # field_height_for_t_rope: int = 80,
+        # use_custom_learned_rope: bool = False,
+    ):
+        super().__init__()
+
+        self.hidden_size = cfg.d_model
+        self.head_dim = cfg.d_head
+        self.output_size = self.head_dim * cfg.n_head
+        self.num_heads = cfg.n_head
+        self.num_key_value_heads = cfg.n_head
+
+        self.use_transposed_rope_for_2d_vertical_orientation = cfg.use_transposed_rope_for_2d_vertical_orientation
+        self.field_width_for_t_rope = cfg.field_width_for_t_rope
+        self.field_height_for_t_rope = cfg.field_height_for_t_rope
+
+        # self.qkv_proj = CastedLinear(self.hidden_size, (self.num_heads + 2 * self.num_key_value_heads) * self.head_dim, bias=False)
+        # self.o_proj = CastedLinear(self.output_size, self.hidden_size, bias=False)
+
+        self.qkv_proj = nn.Linear(self.hidden_size, (self.num_heads + 2 * self.num_key_value_heads) * self.head_dim, bias=False)
+        self.o_proj = nn.Linear(self.output_size, self.hidden_size, bias=False)
+        
+    def apply_rope_and_permute(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        transposed: bool = False,
+        field_w : int = -1,
+        field_h : int = -1
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if transposed :
+            # it has to be like we are iterating
+            assert key.shape[1] == field_h * field_w
+            indexes = torch.arange(field_w * field_h, device=key.device)
+            indexes_mat = indexes.view(field_w, field_h) # IMPORTANT W THEN H!!! hard to explain just believe me
+            indexes_mat_t_flat = indexes_mat.T.flatten()
+            cos = cos[indexes_mat_t_flat]
+            sin = sin[indexes_mat_t_flat]
+
+        query, key = apply_rotary_pos_emb(query, key, cos, sin)
+
+        q = query.permute(0, 2, 1, 3)  # [B,H,S,D]
+        k = key.permute(0, 2, 1, 3)    # [B,H_kv,S,D] (GQA OK)
+        v = value.permute(0, 2, 1, 3)  # [B,H_kv,S,D]
+        return q, k, v
+        
+
+    def forward(self, cos_sin: CosSin, hidden_states: torch.Tensor) -> torch.Tensor:
         batch_size, seq_len, _ = hidden_states.shape
         log_debug(f'{hidden_states.shape = }')
 
@@ -269,6 +376,7 @@ class Attention(nn.Module):
 
 
     
+
 
 
 class TransformerBlockHRM(nn.Module):
