@@ -84,8 +84,11 @@ def get_ds_arc_for_1d(
     seq_len : int,
     nb_samples : int,
     nb_cls : int,
-    task: Literal['fill_between_pieces'],
-    # color_permutation : Optional[Dict[int, int]] = None,
+    task: Literal[
+        'fill_between_pieces',
+        'fill_between_pieces_with_color_from_example'
+    ],
+    **kwargs,
 ) -> List[Tuple[np.ndarray, np.ndarray]] :
     match task:
         case 'fill_between_pieces':
@@ -117,6 +120,47 @@ def get_ds_arc_for_1d(
                         offset += len(fig_in)
                     else:
                         break
+            return [(i, o) for i, o in zip(in_seq, out_seq)]
+        case 'fill_between_pieces_with_color_from_example':
+            do_2d = False
+            if 'do_2d' in kwargs :
+                do_2d = True
+            field_width = None
+            do_transpose = False
+            if do_2d :
+                field_width = kwargs.get('field_width', 15)
+                seq_len = field_width * field_width
+                do_transpose = kwargs.get('do_transpose', False)
+            bg_colors = [0, 4, 6, 9]
+            figure_colors = [1, 2, 3, 5, 7]
+
+            fig_shape = np.array([1, 0, 0, 0, 1])
+            in_seq = np.zeros((nb_samples, seq_len))
+            out_seq = np.zeros((nb_samples, seq_len))
+            for i in range(nb_samples):
+                bg_color = random.choice(bg_colors)
+                in_seq[i] = np.full((seq_len,), bg_color)
+                out_seq[i] = np.full((seq_len,), bg_color)
+                offset = 0
+                while 1 : 
+                    fig_color = random.choice(figure_colors)
+                    filling = random.choice(figure_colors)
+                    fig_in = fig_shape.copy() * fig_color
+                    fig_out = fig_in.copy()
+                    fig_out[1:-1] = filling
+                    fig_in[1:-1] = bg_color
+                    example_pos_in_in = random.randint(0, fig_shape.shape[0] - 3)
+                    fig_in[example_pos_in_in + 1] = filling  # add example of filling color in the input
+                    offset += random.randint(1, seq_len // 5)
+                    if offset < seq_len - fig_in.shape[0]:
+                        in_seq[i, offset:offset + fig_in.shape[0]] = fig_in
+                        out_seq[i, offset:offset + fig_in.shape[0]] = fig_out
+                        offset += len(fig_in)
+                    else:
+                        break
+                if do_transpose:
+                    in_seq[i] = in_seq[i].reshape(field_width, field_width).T.flatten()
+                    out_seq[i] = out_seq[i].reshape(field_width, field_width).T.flatten()
             return [(i, o) for i, o in zip(in_seq, out_seq)]
     raise ValueError("Unknown task")
 
@@ -164,10 +208,25 @@ def get_arc_puzzle_ds_as_flat_ds(
 #     ignore_label_id=16
 # )
 
-# res = get_ds_arc_for_1d(
-#     seq_len=20,
-#     nb_samples=30,
-#     nb_cls=10,
-#     task='fill_between_pieces'
-# )
+res = get_ds_arc_for_1d(
+    seq_len=20,
+    nb_samples=30,
+    nb_cls=10,
+    task='fill_between_pieces_with_color_from_example',
+    do_2d = True,
+    field_width = 15,
+    do_transpose = True
+)
+# def print_fields(q, a) :
+#     q_f, a_f = q.reshape(15, 15), a.reshape(15, 15)
+#     plt.subplot(1, 2, 1)
+#     plt.imshow(q_f, aspect='auto')
+#     plt.title("Input")
+#     plt.subplot(1, 2, 2)
+#     plt.imshow(a_f, aspect='auto')
+#     plt.title("Output")
+#     plt.show()
 # print(res)
+# for r in res[:4] :
+#     print(r)
+#     print_fields(*r)
