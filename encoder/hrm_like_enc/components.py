@@ -309,6 +309,7 @@ class TransformerBlockHRM(nn.Module):
         # rope_cos : torch.Tensor = self.rope_cos # type: ignore
         # rope_sin : torch.Tensor = self.rope_sin # type: ignore
         cos_sin : CosSin = self.rotary_emb()
+        cos_sin : CosSin = (cos_sin[0].to(hidden_states.device), cos_sin[1].to(hidden_states.device))
         hidden_states = rms_norm(hidden_states + self.self_attn(cos_sin=cos_sin, hidden_states=hidden_states), variance_epsilon=self.norm_eps)
         # Fully Connected
         hidden_states = rms_norm(hidden_states + self.mlp(hidden_states), variance_epsilon=self.norm_eps)
