@@ -132,11 +132,11 @@ class RotaryEmbedding(nn.Module):
 
         # Different from paper, but it uses a different permutation in order to obtain the same calculation
         emb = torch.cat((freqs, freqs), dim=-1)
-        self.cos_cached = emb.cos()
-        self.sin_cached = emb.sin()
+        self.register_buffer("cos_cached", emb.cos())
+        self.register_buffer("sin_cached", emb.sin())
 
     def forward(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        return self.cos_cached, self.sin_cached
+        return self.cos_cached, self.sin_cached # type: ignore
 
 class LearnedROPE(nn.Module) :
 
