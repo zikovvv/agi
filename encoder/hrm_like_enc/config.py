@@ -8,6 +8,7 @@ class EncoderConfig:
    # Model dims
     d_model: int = 512
     n_head: int = 8
+    d_head: int = 64    
     num_layers: int = 2
     nb_refinement_steps: int = 8
     dim_feedforward: int = 1024
@@ -16,6 +17,12 @@ class EncoderConfig:
     layer_norm_eps: float = 1e-5
     rope_theta: float = 10000.0
     
+    # 2d rope
+    # use_2d_rope_attn: bool = False
+    # rope_2d_attn_row_width: int = 40
+    use_transposed_rope_for_2d_vertical_orientation: bool = False
+    field_width_for_t_rope: int = 40
+    field_height_for_t_rope: int = 80
 
     # Grid limits
     max_len: int = 5000

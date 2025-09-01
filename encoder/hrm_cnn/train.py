@@ -216,7 +216,7 @@ def main(
             batch_size_train = tcfg.batch_size,
             batch_size_eval = tcfg.batch_size,
             max_grid_width=dcfg.max_width,
-            add_input_to_labels=True,
+            add_input_to_labels=False,
             copy_input_to_output = True,
             device = tcfg.device,
         )

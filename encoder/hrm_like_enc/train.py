@@ -184,21 +184,26 @@ def main(
         val_frac=0.1,
         test_frac=0.0,
         num_samples=300,
-        seq_len=30,
+        seq_len=120,
         max_width=40
     ) if dcfg is None else dcfg
     tcfg = TrainConfig(
         batch_size=8,
         lr=3e-4
     ) if tcfg is None else tcfg
+    field_width = 15
     mcfg = EncoderConfig(
         d_model=128,
         n_head=8,
-        num_layers=1,
-        nb_refinement_steps=8,
-        dim_feedforward=512,
+        d_head=32,
+        num_layers=2,
+        nb_refinement_steps=1,
+        dim_feedforward=256,
         vocab_size=200,
-        max_len=4000
+        max_len=4000,
+        use_transposed_rope_for_2d_vertical_orientation=False,
+        field_width_for_t_rope=field_width,
+        field_height_for_t_rope=field_width * 2,
     ) if mcfg is None else mcfg
 
     # device = tcfg.device
@@ -210,7 +215,10 @@ def main(
         seq_len=dcfg.seq_len,
         nb_samples=dcfg.num_samples,
         nb_cls=10,
-        task='fill_between_pieces'
+        task='fill_between_pieces_with_color_from_example',
+        do_2d = True,
+        field_width = field_width,
+        do_transpose = True,
     )
     # ds_raw = get_arc_puzzle_ds_as_flat_ds(
     #     puzzle_name=PuzzleNames.FILL_SIMPLE_OPENED_SHAPE,
@@ -228,9 +236,11 @@ def main(
         split_ratio = 1 - dcfg.val_frac,
         batch_size_train = tcfg.batch_size,
         batch_size_eval = tcfg.batch_size,
-        device = tcfg.device
+        device = tcfg.device,
+        add_sep=False
     )
-    for epoch in range(1, tcfg.epochs + 1):
+    epoch = 0
+    while 1 :
         tr = train_one_epoch(model, train_dl, optimizer)
         l  = f"Epoch {epoch:02d} | "
         for k, v in tr.items() : 
@@ -243,6 +253,7 @@ def main(
         for k, v in va.items() : 
             l += f"{k} {v:.4f} | "
         log(f"{l}")
+        epoch += 1
 
     log("Done.")
 

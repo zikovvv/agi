@@ -41,6 +41,14 @@ CosSin = Tuple[torch.Tensor, torch.Tensor]
 def _find_multiple(a, b):
     return (-(a // -b)) * b
 
+def rms_norm(hidden_states: torch.Tensor, variance_epsilon: float) -> torch.Tensor:
+    input_dtype = hidden_states.dtype
+    hidden_states = hidden_states.to(torch.float32)
+
+    variance = hidden_states.square().mean(-1, keepdim=True)
+    hidden_states = hidden_states * torch.rsqrt(variance + variance_epsilon)
+    return hidden_states.to(input_dtype)
+
 
 def rotate_half(x: torch.Tensor):
     """Rotates half the hidden dims of the input."""
@@ -83,6 +91,18 @@ class CastedLinear(nn.Module):
         return F.linear(input, self.weight.to(input.dtype), bias=self.bias.to(input.dtype) if self.bias is not None else None)
 
 
+class SwiGLU(nn.Module):
+    def __init__(self, hidden_size: int, expansion: float):
+        super().__init__()
+        inter = _find_multiple(round(expansion * hidden_size * 2 / 3), 256)
+
+        self.gate_up_proj = CastedLinear(hidden_size, inter * 2, bias=False)
+        self.down_proj    = CastedLinear(inter, hidden_size, bias=False)
+
+    def forward(self, x):
+        gate, up = self.gate_up_proj(x).chunk(2, dim=-1)
+        return self.down_proj(F.silu(gate) * up)
+    
 class CastedEmbedding(nn.Module):
     def __init__(self,
                  num_embeddings: int,
@@ -118,84 +138,138 @@ class RotaryEmbedding(nn.Module):
     def forward(self) -> Tuple[torch.Tensor, torch.Tensor]:
         return self.cos_cached, self.sin_cached
 
+class LearnedROPE(nn.Module) :
+
+    def __init__(self, dim, max_position_embeddings, base, device=None):
+        super().__init__()
+        
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32, device=device) / dim))
+        t = torch.arange(max_position_embeddings, dtype=torch.float32, device=device)
+        freqs = torch.outer(t, inv_freq)
+        freqs = torch.cat((freqs, freqs), dim=-1)
+        
+        # now fill freqs with random nubers for experiment
+        freq_mean = freqs.mean()
+        freqs = torch.randn_like(freqs) * freq_mean
+        
+        self.initial_freqs_backup = freqs.detach().clone()
+        self.freq = nn.Parameter(
+            freqs, requires_grad=True
+        )
+
+    def forward(self) -> Tuple[torch.Tensor, torch.Tensor]:
+        cos = self.freq.cos()
+        sin = self.freq.sin()
+        # print(self.freq.isclose(self.initial_freqs_backup).sum())
+        return cos, sin
 
 class Attention(nn.Module):
-    def __init__(self, hidden_size, head_dim, num_heads, num_key_value_heads, causal=False):
+    def __init__(
+        self,
+        cfg : EncoderConfig,
+        
+        # hidden_size,
+        # head_dim,
+        # num_heads,
+        # num_key_value_heads,
+        # use_transposed_rope_for_2d_vertical_orientation: bool = False,
+        # field_width_for_t_rope: int = 40,
+        # field_height_for_t_rope: int = 80,
+        # use_custom_learned_rope: bool = False,
+    ):
         super().__init__()
 
-        self.hidden_size = hidden_size
-        self.head_dim = head_dim
-        self.output_size = head_dim * num_heads
-        self.num_heads = num_heads
-        self.num_key_value_heads = num_key_value_heads
-        self.causal = causal
+        self.hidden_size = cfg.d_model
+        self.head_dim = cfg.d_head
+        self.output_size = self.head_dim * cfg.n_head
+        self.num_heads = cfg.n_head
+        self.num_key_value_heads = cfg.n_head
 
-        self.qkv_proj = CastedLinear(self.hidden_size, (self.num_heads + 2 * self.num_key_value_heads) * self.head_dim, bias=False)
-        self.o_proj = CastedLinear(self.output_size, self.hidden_size, bias=False)
+        self.use_transposed_rope_for_2d_vertical_orientation = cfg.use_transposed_rope_for_2d_vertical_orientation
+        self.field_width_for_t_rope = cfg.field_width_for_t_rope
+        self.field_height_for_t_rope = cfg.field_height_for_t_rope
+
+        # self.qkv_proj = CastedLinear(self.hidden_size, (self.num_heads + 2 * self.num_key_value_heads) * self.head_dim, bias=False)
+        # self.o_proj = CastedLinear(self.output_size, self.hidden_size, bias=False)
+
+        self.qkv_proj = nn.Linear(self.hidden_size, (self.num_heads + 2 * self.num_key_value_heads) * self.head_dim, bias=False)
+        self.o_proj = nn.Linear(self.output_size, self.hidden_size, bias=False)
+        
+    def apply_rope_and_permute(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        transposed: bool = False,
+        field_w : int = -1,
+        field_h : int = -1
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if transposed :
+            # it has to be like we are iterating
+            assert key.shape[1] == field_h * field_w
+            indexes = torch.arange(field_w * field_h, device=key.device)
+            indexes_mat = indexes.view(field_w, field_h) # IMPORTANT W THEN H!!! hard to explain just believe me
+            indexes_mat_t_flat = indexes_mat.T.flatten()
+            cos = cos[indexes_mat_t_flat]
+            sin = sin[indexes_mat_t_flat]
+
+        query, key = apply_rotary_pos_emb(query, key, cos, sin)
+
+        q = query.permute(0, 2, 1, 3)  # [B,H,S,D]
+        k = key.permute(0, 2, 1, 3)    # [B,H_kv,S,D] (GQA OK)
+        v = value.permute(0, 2, 1, 3)  # [B,H_kv,S,D]
+        return q, k, v
+        
 
     def forward(self, cos_sin: CosSin, hidden_states: torch.Tensor) -> torch.Tensor:
         batch_size, seq_len, _ = hidden_states.shape
+        log_debug(f'{hidden_states.shape = }')
 
         # hidden_states: [bs, seq_len, num_heads, head_dim]
         qkv : torch.Tensor = self.qkv_proj(hidden_states)
+        log_debug(f'{qkv.shape = }')
 
         # Split head
         qkv = qkv.view(batch_size, seq_len, self.num_heads + 2 * self.num_key_value_heads, self.head_dim)
         query = qkv[:, :, :self.num_heads]
         key = qkv[:, :, self.num_heads: self.num_heads + self.num_key_value_heads]
         value = qkv[:, :, self.num_heads + self.num_key_value_heads:]
+        log_debug(f'{qkv.shape = }, {query.shape = }, {key.shape = }, {value.shape = }')
 
-        # RoPE
-        # if cos_sin is not None:
-        cos, sin = cos_sin
-        query, key = apply_rotary_pos_emb(query, key, cos, sin)
 
-        # flash attn
-        # attn_output = flash_attn_func(q=query, k=key, v=value, causal=self.causal)
-        # if isinstance(attn_output, tuple):  # fa2 and fa3 compatibility
-            # attn_output = attn_output[0]
+        q, k, v = self.apply_rope_and_permute(query, key, value, cos_sin[0], cos_sin[1])
+        log_debug(f'{q.shape = }, {k.shape = }, {v.shape = }')
 
-        # Portable path: PyTorch SDPA (works on CPU, Turing, etc.)
-        # SDPA expects [bs, heads, seq, dim]
-        q = query.permute(0, 2, 1, 3)  # [B,H,S,D]
-        k = key.permute(0, 2, 1, 3)    # [B,H_kv,S,D] (GQA OK)
-        v = value.permute(0, 2, 1, 3)  # [B,H_kv,S,D]
-        attn_mask = None
-        if self.causal:
-            # SDPA causal=True via is_causal flag
-            attn = sdpa(q, k, v, attn_mask=attn_mask, is_causal=True)
-        else:
-            attn = sdpa(q, k, v, attn_mask=attn_mask, is_causal=False)
+        attn = sdpa(q, k, v, attn_mask=None, is_causal=False)
+        log_debug(f'{attn.shape = }')
         attn_output = attn.permute(0, 2, 1, 3)  # [B,S,H,D]
-
-
-        # attn_output: [batch_size, num_heads, seq_len, head_dim]
         attn_output = attn_output.view(batch_size, seq_len, self.output_size)  # type: ignore
+        log_debug(f'{attn_output.shape = }')
+
+
+        if self.use_transposed_rope_for_2d_vertical_orientation:
+            q, k, v = self.apply_rope_and_permute(
+                query,
+                key,
+                value,
+                cos_sin[0], 
+                cos_sin[1],
+                transposed=True,
+                field_w=self.field_width_for_t_rope,
+                field_h=self.field_height_for_t_rope
+            )
+            attn_vertical = sdpa(q, k, v, attn_mask=None, is_causal=False)
+            attn_output_vertical = attn_vertical.permute(0, 2, 1, 3)  # [B,S,H,D]
+            attn_output_vertical = attn_output_vertical.view(batch_size, seq_len, self.output_size)  # type: ignore
+            attn_output = (attn_output + attn_output_vertical) / 2
+
         return self.o_proj(attn_output)
 
 
     
-def rms_norm(hidden_states: torch.Tensor, variance_epsilon: float) -> torch.Tensor:
-    input_dtype = hidden_states.dtype
-    hidden_states = hidden_states.to(torch.float32)
 
-    variance = hidden_states.square().mean(-1, keepdim=True)
-    hidden_states = hidden_states * torch.rsqrt(variance + variance_epsilon)
-    return hidden_states.to(input_dtype)
-
-
-class SwiGLU(nn.Module):
-    def __init__(self, hidden_size: int, expansion: float):
-        super().__init__()
-        inter = _find_multiple(round(expansion * hidden_size * 2 / 3), 256)
-
-        self.gate_up_proj = CastedLinear(hidden_size, inter * 2, bias=False)
-        self.down_proj    = CastedLinear(inter, hidden_size, bias=False)
-
-    def forward(self, x):
-        gate, up = self.gate_up_proj(x).chunk(2, dim=-1)
-        return self.down_proj(F.silu(gate) * up)
-    
 
 class TransformerBlockHRM(nn.Module):
     def __init__(
@@ -204,21 +278,22 @@ class TransformerBlockHRM(nn.Module):
     ) -> None:
         super().__init__()
         self.cfg = cfg
-        self.rotary_emb = RotaryEmbedding(
-            dim = self.cfg.d_model // self.cfg.n_head,
-            max_position_embeddings = self.cfg.max_len,
-            base = self.cfg.rope_theta
+        # self.rotary_emb = RotaryEmbedding(
+        #     dim = self.cfg.d_head,
+        #     max_position_embeddings = self.cfg.max_len,
+        #     base = self.cfg.rope_theta
+        # )
+        self.rotary_emb = LearnedROPE(
+            dim=self.cfg.d_head,
+            max_position_embeddings=self.cfg.max_len,
+            base=self.cfg.rope_theta
         )
-        self.rope_cos, self.rope_sin = self.rotary_emb()
-        self.register_buffer('rope_cos', self.rope_cos, persistent=False)
-        self.register_buffer('rope_sin', self.rope_sin, persistent=False)
+        # self.rope_cos, self.rope_sin = self.rotary_emb()
+        # self.register_buffer('rope_cos', self.rope_cos, persistent=False)
+        # self.register_buffer('rope_sin', self.rope_sin, persistent=False)
 
         self.self_attn = Attention(
-            hidden_size=cfg.d_model,
-            head_dim=cfg.d_model // cfg.n_head,
-            num_heads=cfg.n_head,
-            num_key_value_heads=cfg.n_head,
-            causal=False
+            cfg=cfg
         )
         self.mlp = SwiGLU(
             hidden_size=cfg.d_model,
@@ -231,9 +306,9 @@ class TransformerBlockHRM(nn.Module):
         # Self Attention
         log_debug(f'{hidden_states.shape = }')
         # cos_sin : torch.Tensor = self.rope_cos_sin # type: ignore
-        rope_cos : torch.Tensor = self.rope_cos # type: ignore
-        rope_sin : torch.Tensor = self.rope_sin # type: ignore
-        cos_sin : CosSin = (rope_cos, rope_sin)
+        # rope_cos : torch.Tensor = self.rope_cos # type: ignore
+        # rope_sin : torch.Tensor = self.rope_sin # type: ignore
+        cos_sin : CosSin = self.rotary_emb()
         hidden_states = rms_norm(hidden_states + self.self_attn(cos_sin=cos_sin, hidden_states=hidden_states), variance_epsilon=self.norm_eps)
         # Fully Connected
         hidden_states = rms_norm(hidden_states + self.mlp(hidden_states), variance_epsilon=self.norm_eps)
