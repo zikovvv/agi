@@ -470,6 +470,7 @@ def get_dataloaders_for_flat_seq_cls(
     split_ratio : float,
     batch_size_train : int,
     batch_size_eval : int,
+    add_sep : bool,
     device : str
 ) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
     def get_as_input_and_labels_pairs() -> List[Tuple[torch.Tensor, torch.Tensor]]:
@@ -480,18 +481,20 @@ def get_dataloaders_for_flat_seq_cls(
             output_tensor = torch.tensor(output_seq, dtype=torch.long)
             
             # Create sequence: input + sep + masked_tokens
-            total_len = input_tensor.shape[0] + 1 + output_tensor.shape[0]
+            sep_shift = int(add_sep)
+            total_len = input_tensor.shape[0] + sep_shift + output_tensor.shape[0]
             input_ids = torch.full((total_len,), pad_token_id, dtype=torch.long)
             labels = torch.full((total_len,), ignore_label_id, dtype=torch.long)
             
             # Fill input part
             input_ids[:input_tensor.shape[0]] = input_tensor
             # Add separator
-            input_ids[input_tensor.shape[0]] = sep_token_id
+            if add_sep:
+                input_ids[input_tensor.shape[0]] = sep_token_id
             # Fill masked tokens for output part
-            input_ids[input_tensor.shape[0] + 1:] = masked_token_id
+            input_ids[input_tensor.shape[0] + sep_shift:] = masked_token_id
             # Set labels for output part only
-            labels[input_tensor.shape[0] + 1:] = output_tensor
+            labels[input_tensor.shape[0] + sep_shift:] = output_tensor
             
             res.append((input_ids, labels))
         return res
@@ -568,7 +571,8 @@ def ex3():
         split_ratio,
         batch_size_train,
         batch_size_eval,
-        device
+        add_sep=True,
+        device=device,
     )
 
     for batch in train_dl:
