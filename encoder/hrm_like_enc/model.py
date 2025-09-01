@@ -36,12 +36,16 @@ class EncoderModel(nn.Module):
     ) -> torch.Tensor:
         # print(input_ids.shape)
         # exit()
-        x = self.token_embed(input_ids)  # [B,L,D]
-        # x = self.embed_ln(x)
-        h = self.encoder(x)
-        if self.cfg.nb_refinement_steps > 1:
-            for i in range(self.cfg.nb_refinement_steps - 1):
+        h = self.token_embed(input_ids)  # [B,L,D]
+        assert self.cfg.nb_refinement_steps > 0
+        assert self.cfg.nb_last_trained_steps > 0
+        assert self.cfg.nb_last_trained_steps <= self.cfg.nb_refinement_steps
+        nb_steps_no_grad = self.cfg.nb_refinement_steps - self.cfg.nb_last_trained_steps
+        with torch.no_grad():
+            for i in range(nb_steps_no_grad):
                 h = self.encoder(h)
+        for i in range(self.cfg.nb_last_trained_steps):
+            h = self.encoder(h)
         return h
 
 

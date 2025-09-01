@@ -11,6 +11,7 @@ class EncoderConfig:
     d_head: int = 64    
     num_layers: int = 2
     nb_refinement_steps: int = 8
+    nb_last_trained_steps: int = 1  # how many of the last steps to train. 1 means only the last step, all means all steps
     dim_feedforward: int = 1024
     dropout: float = 0.1
     norm_first: bool = True
