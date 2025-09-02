@@ -266,7 +266,10 @@ def main(
         dim_feedforward=256,
         vocab_size=200,
         max_len=4000,
-        
+        use_cnn=False,
+        enable_pseudo_diffusion_inner=True,
+        enable_pseudo_diffusion_outer=True,
+
         use_transposed_rope_for_2d_vertical_orientation=False,
         field_width_for_t_rope=field_width,
         field_height_for_t_rope=field_width * 2,
@@ -311,13 +314,17 @@ def main(
         for k, v in tr.items() : 
             l += f"{k} {v:.4f} | "
         log(f"{l}")
-        
+
+        nb_refinement_steps_back = mcfg.nb_refinement_steps
+        mcfg.nb_refinement_steps = 4
         l  = f"Epoch {epoch:02d} | "
         with torch.no_grad():
             va = evaluate(model, val_dl, show_nb_first_preds=1, max_field_width=dcfg.max_width, device = tcfg.device)
         for k, v in va.items() : 
             l += f"{k} {v:.4f} | "
         log(f"{l}")
+        mcfg.nb_refinement_steps = nb_refinement_steps_back
+
         epoch += 1
 
     log("Done.")

@@ -285,6 +285,7 @@ class Attention2DROPEAxial(nn.Module):
         # use_custom_learned_rope: bool = False,
     ):
         super().__init__()
+        self.cfg = cfg
 
         self.hidden_size = cfg.d_model
         self.head_dim = cfg.d_head
@@ -302,6 +303,35 @@ class Attention2DROPEAxial(nn.Module):
         self.qkv_proj = nn.Linear(self.hidden_size, (self.num_heads + 2 * self.num_key_value_heads) * self.head_dim, bias=False)
         self.o_proj = nn.Linear(self.output_size, self.hidden_size, bias=False)
         
+        
+        self.q_cnn = nn.Sequential(
+            nn.Conv2d(self.head_dim, self.head_dim, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(self.head_dim, self.head_dim, kernel_size=5, padding=2),
+            nn.ReLU(),
+            nn.Conv2d(self.head_dim, self.head_dim, kernel_size=7, padding=3),
+            nn.ReLU(),
+        )
+        
+        
+        self.k_cnn = nn.Sequential(
+            nn.Conv2d(self.head_dim, self.head_dim, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(self.head_dim, self.head_dim, kernel_size=5, padding=2),
+            nn.ReLU(),
+            nn.Conv2d(self.head_dim, self.head_dim, kernel_size=7, padding=3),
+            nn.ReLU(),
+        )
+
+        self.v_cnn = nn.Sequential(
+            nn.Conv2d(self.head_dim, self.head_dim, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(self.head_dim, self.head_dim, kernel_size=5, padding=2),
+            nn.ReLU(),
+            nn.Conv2d(self.head_dim, self.head_dim, kernel_size=7, padding=3),
+            nn.ReLU(),
+        )
+
     def apply_rope_and_permute(
         self,
         query: torch.Tensor,
@@ -344,7 +374,17 @@ class Attention2DROPEAxial(nn.Module):
         key = qkv[:, :, self.num_heads: self.num_heads + self.num_key_value_heads]
         value = qkv[:, :, self.num_heads + self.num_key_value_heads:]
         log_debug(f'{qkv.shape = }, {query.shape = }, {key.shape = }, {value.shape = }')
-
+        
+        if self.cfg.use_cnn :
+            query_ = self.q_cnn(query)
+            key_ = self.k_cnn(key)
+            value_ = self.v_cnn(value)
+            assert query_.shape == query.shape
+            assert key_.shape == key.shape
+            assert value_.shape == value.shape
+            query = query_
+            key = key_
+            value = value_
 
         q, k, v = self.apply_rope_and_permute(query, key, value, cos_sin[0], cos_sin[1])
         log_debug(f'{q.shape = }, {k.shape = }, {v.shape = }')

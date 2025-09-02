@@ -10,13 +10,21 @@ class EncoderConfig:
     n_head: int = 8
     d_head: int = 64    
     num_layers: int = 2
-    nb_refinement_steps: int = 8
-    nb_last_trained_steps: int = 1  # how many of the last steps to train. 1 means only the last step, all means all steps
-    dim_feedforward: int = 1024
     dropout: float = 0.1
     norm_first: bool = True
     layer_norm_eps: float = 1e-5
     rope_theta: float = 10000.0
+    
+    
+    nb_refinement_steps: int = 8
+    nb_last_trained_steps: int = 1  # how many of the last steps to train. 1 means only the last step, all means all steps
+    dim_feedforward: int = 1024
+    use_cnn: bool = False
+    enable_pseudo_diffusion_inner: bool = False
+    enable_pseudo_diffusion_outer: bool = False
+    feed_first_half: bool = False
+    
+    
     
     # 2d rope
     # use_2d_rope_attn: bool = False

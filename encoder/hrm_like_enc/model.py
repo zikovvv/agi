@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from encoder.hrm_like_enc.components import TransformerBlockHRM
 from encoder.hrm_like_enc.config import EncoderConfig
 
+
 class EncoderModel(nn.Module):
     def __init__(self, cfg: EncoderConfig):
         super().__init__()
@@ -26,28 +27,65 @@ class EncoderModel(nn.Module):
         self.embed_drop = nn.Dropout(cfg.dropout)
         self.seq_len = cfg.max_len
 
-        self.encoder = nn.Sequential(
-            *[TransformerBlockHRM(self.cfg) for _ in range(self.cfg.num_layers)]
-        )
+        # self.encoder = nn.Sequential(
+        #     *[TransformerBlockHRM(self.cfg) for _ in range(self.cfg.num_layers)]
+        # )
         
+        self.blocks = nn.ModuleList(
+            [TransformerBlockHRM(self.cfg) for _ in range(self.cfg.num_layers)]
+        )
+
+    def encoder(self, h : torch.Tensor) -> torch.Tensor:
+        first_half_copy = h[:, :self.seq_len // 2].clone()
+        if self.cfg.enable_pseudo_diffusion_inner :
+            for block in self.blocks :
+                h = h - block(h)
+                if self.cfg.feed_first_half :
+                    h[:, :first_half_copy.shape[1]] = first_half_copy
+            return h
+        else :    
+            for block in self.blocks :
+                h = block(h)
+            return h
+
+
     def forward(
         self,
         input_ids: torch.Tensor,        # [B, L]
     ) -> torch.Tensor:
         # print(input_ids.shape)
         # exit()
-        inps = self.token_embed(input_ids)  # [B,L,D]
-        assert self.cfg.nb_refinement_steps > 0
-        assert self.cfg.nb_last_trained_steps > 0
-        assert self.cfg.nb_last_trained_steps <= self.cfg.nb_refinement_steps
-        nb_steps_no_grad = self.cfg.nb_refinement_steps - self.cfg.nb_last_trained_steps
-        h = torch.zeros_like(inps)
-        with torch.no_grad():
-            for i in range(nb_steps_no_grad):
+        if self.cfg.enable_pseudo_diffusion_outer :
+            
+            inps = self.token_embed(input_ids)  # [B,L,D]
+            assert self.cfg.nb_refinement_steps > 0
+            assert self.cfg.nb_last_trained_steps > 0
+            assert self.cfg.nb_last_trained_steps <= self.cfg.nb_refinement_steps
+            nb_steps_no_grad = self.cfg.nb_refinement_steps - self.cfg.nb_last_trained_steps
+            h = inps
+            first_half_copy = h[:, :self.seq_len // 2].clone()
+            with torch.no_grad():
+                for i in range(nb_steps_no_grad):
+                    h = h - self.encoder(h)
+                    if self.cfg.feed_first_half :
+                        h[:, :first_half_copy.shape[1]] = first_half_copy
+            for i in range(self.cfg.nb_last_trained_steps):
+                h = h - self.encoder(h)
+            return h
+        else :
+                
+            inps = self.token_embed(input_ids)  # [B,L,D]
+            assert self.cfg.nb_refinement_steps > 0
+            assert self.cfg.nb_last_trained_steps > 0
+            assert self.cfg.nb_last_trained_steps <= self.cfg.nb_refinement_steps
+            nb_steps_no_grad = self.cfg.nb_refinement_steps - self.cfg.nb_last_trained_steps
+            h = torch.zeros_like(inps)
+            with torch.no_grad():
+                for i in range(nb_steps_no_grad):
+                    h = self.encoder(h + inps)
+            for i in range(self.cfg.nb_last_trained_steps):
                 h = self.encoder(h + inps)
-        for i in range(self.cfg.nb_last_trained_steps):
-            h = self.encoder(h + inps)
-        return h
+            return h
 
 
 class EncoderForCLS(nn.Module):
