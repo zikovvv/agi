@@ -23,6 +23,9 @@ class EncoderConfig:
     enable_pseudo_diffusion_inner: bool = False
     enable_pseudo_diffusion_outer: bool = False
     feed_first_half: bool = False
+    nb_info_tokens : int = 5
+    info_token_id : int = 120
+    is_encoder: bool = True  # False means decoder
 
     # 2d rope
     # use_2d_rope_attn: bool = False

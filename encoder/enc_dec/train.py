@@ -1,8 +1,9 @@
 import atexit
 import json
+from pyexpat import model
 import tqdm
-from encoder.hrm_like_enc.config import DatasetConfig, TrainConfig, EncoderConfig            
-from encoder.hrm_like_enc.inference import augment_colors_batch, augmented_inference_batched, augmented_inference_batched_with_voting
+from encoder.enc_dec.config import DatasetConfig, TrainConfig, EncoderConfig            
+from encoder.enc_dec.inference import augment_colors_batch, augmented_inference_batched, augmented_inference_batched_with_voting
 from gen_simple_arc_ds import PuzzleNames
 from get_dataloader_for_model_for_task import get_dataloaders_for_flat_seq_cls, get_dataloaders_for_encoder_masked_modeling
 from get_ds_for_task import get_arc_puzzle_ds_as_flat_ds, get_ds_1d_seq_for_random_input_with_some_transformation_for_output, get_custom_ds_arc, get_ds_for_masked_modeling_only_answer, get_ds_for_masked_modeling_only_answer_only_foreground_items
@@ -27,7 +28,8 @@ def train_one_epoch(
     model: nn.Module,
     loader: DataLoader,
     optimizer: torch.optim.Optimizer,
-    device : str = 'cpu',
+    max_field_width: int,
+    device: str = 'cpu',
 ) -> Dict[str, float]:
     ignored_id: int = model.cfg.ignore_id  # type: ignore
     pad_token_id: int = model.cfg.pad_token_id  # type: ignore
@@ -37,16 +39,22 @@ def train_one_epoch(
     total_loss = 0.0
     total_correct = 0
     total_classified = 0
+
+    field_area = max_field_width * max_field_width
+
     for batch in tqdm.tqdm(loader, total=len(loader)):
-        input_ids, labels = batch['input_ids'], batch['labels']
-        colors_orig, colors_perms, input_ids, labels = augment_colors_batch(
-            input_ids,
-            labels,
-            max_permutations=5,
-            ignore_label_id=ignored_id,
-            pad_token_id=pad_token_id,
-            add_orig=True
-        )
+        input_ids, labels = batch['input_ids'].to(device), batch['labels'].to(device)
+        input_ids = input_ids[:, :field_area]
+        labels = labels[:, field_area:]
+
+        # colors_orig, colors_perms, input_ids, labels = augment_colors_batch(
+        #     input_ids,
+        #     labels,
+        #     max_permutations=5,
+        #     ignore_label_id=ignored_id,
+        #     pad_token_id=pad_token_id,
+        #     add_orig=True
+        # )
 
         optimizer.zero_grad(set_to_none=True)
         res = model(input_ids, labels)
@@ -120,10 +128,15 @@ def evaluate(
     total_cor_vote = 0
     total_cor_aug = 0
 
+    field_area = max_field_width * max_field_width
 
     showed = 0
     for it, batch in enumerate(loader):
         input_ids, labels = batch['input_ids'].to(device), batch['labels'].to(device)
+        input_ids = input_ids[:, :field_area]
+        labels = labels[:, field_area:]
+
+
         # res = model(input_ids, labels)
         # loss = res['loss']
         # logits : torch.Tensor = res['logits']
@@ -174,30 +187,29 @@ def evaluate(
         total_labels_1 += nb_labels
         total_loss_1 += loss_1
 
-        loss_aug, preds_voted, nb_labels_aug, nb_cor_aug, nb_labels_vote, nb_cor_voting = augmented_inference_batched_with_voting(
-            model = model,
-            input_ids = input_ids,
-            labels = labels,
-            ignore_label_id = ignored_id,
-            pad_token_id = pad_token_id,
-            debug = it < show_nb_first_preds
-        )
-        total_cor_aug += nb_cor_aug
-        total_labels_aug += nb_labels_aug
-        total_loss_aug += loss_aug
+        # loss_aug, preds_voted, nb_labels_aug, nb_cor_aug, nb_labels_vote, nb_cor_voting = augmented_inference_batched_with_voting(
+        #     model = model,
+        #     input_ids = input_ids,
+        #     labels = labels,
+        #     ignore_label_id = ignored_id,
+        #     pad_token_id = pad_token_id,
+        #     debug = it < show_nb_first_preds
+        # )
+        # total_cor_aug += nb_cor_aug
+        # total_labels_aug += nb_labels_aug
+        # total_loss_aug += loss_aug
 
-        total_cor_vote += nb_cor_voting
-        total_labels_vote += nb_labels_vote
+        # total_cor_vote += nb_cor_voting
+        # total_labels_vote += nb_labels_vote
 
         if showed < show_nb_first_preds:
-            field_area = max_field_width * max_field_width
             plot_eval_batch(
             [
-                input_ids[:10, :field_area],
-                labels[:10, field_area:],
+                input_ids[:10, :],
+                labels[:10, :],
                 # preds[:10, field_area:],
-                preds_1[:10, field_area:],
-                preds_voted[:10, field_area:]
+                preds_1[:10, :],
+                # preds_voted[:10, field_area:]
             ], max_field_width=max_field_width) # type: ignore
             showed += 1
 
@@ -219,12 +231,12 @@ def evaluate(
     }
 
 
-def _get_model(mcfg : EncoderConfig, tcfg : TrainConfig) -> EncoderForCLS :
-    model = EncoderForCLS(mcfg).to(tcfg.device)
+def _get_model(mcfg_e : EncoderConfig, mcfg_d : EncoderConfig, tcfg : TrainConfig) -> EncoderDecoder :
+    model = EncoderDecoder(mcfg_e, mcfg_d).to(tcfg.device)
     return model
 
 
-def _get_optimizer(model : EncoderForCLS, tcfg : TrainConfig) :
+def _get_optimizer(model : EncoderDecoder, tcfg : TrainConfig) :
     optimizer = torch.optim.Adam(model.parameters(), lr=tcfg.lr)
     return optimizer
     
@@ -235,9 +247,6 @@ logger.add(sys.stderr, level="INFO")
 
 
 def main(
-    dcfg : Optional[DatasetConfig] = None,
-    tcfg : Optional[TrainConfig] = None,
-    mcfg : Optional[EncoderConfig] = None,
 ):
     field_width = 15
     seq_len = -100
@@ -248,33 +257,56 @@ def main(
         num_samples=200,
         seq_len=seq_len,
         max_width=field_width
-    ) if dcfg is None else dcfg
+    )
     tcfg = TrainConfig(
         batch_size=8,
         lr=3e-4
-    ) if tcfg is None else tcfg
-    mcfg = EncoderConfig(
-        d_model=128,
+    )
+    mcfg_e = EncoderConfig(
+        d_model=256,
         n_head=8,
-        d_head=32,
+        d_head=64,
         num_layers=4,
         nb_refinement_steps=1,
         nb_last_trained_steps=1,
-        dim_feedforward=256,
+        dim_feedforward=512,
         vocab_size=200,
         max_len=4000,
         use_cnn=False,
-        enable_pseudo_diffusion_inner=True,
-        enable_pseudo_diffusion_outer=True,
+        enable_pseudo_diffusion_inner=False,
+        enable_pseudo_diffusion_outer=False,
         feed_first_half=False,
+
+        is_encoder=True,
+        nb_info_tokens=50,
 
         use_transposed_rope_for_2d_vertical_orientation=False,
         field_width_for_t_rope=field_width,
         field_height_for_t_rope=field_width * 2,
-    ) if mcfg is None else mcfg
+    )
+    mcfg_d = EncoderConfig(
+        d_model=256,
+        n_head=8,
+        d_head=64,
+        num_layers=8,
+        nb_refinement_steps=1,
+        nb_last_trained_steps=1,
+        dim_feedforward=512,
+        vocab_size=200,
+        max_len=4000,
+        use_cnn=False,
+        enable_pseudo_diffusion_inner=False,
+        enable_pseudo_diffusion_outer=False,
+        feed_first_half=False,
 
+        is_encoder=False,
+
+        use_transposed_rope_for_2d_vertical_orientation=False,
+        field_width_for_t_rope=field_width,
+        field_height_for_t_rope=field_width * 2,
+    )
     # device = tcfg.device
-    model = _get_model(mcfg, tcfg)
+    model : EncoderDecoder = _get_model(mcfg_e, mcfg_d, tcfg)
     optimizer = _get_optimizer(model, tcfg)
     atexit.register(get_cleanup_function(model, optimizer=optimizer))
     
@@ -283,22 +315,13 @@ def main(
         nb_samples=dcfg.num_samples,
         nb_cls=10,
         task='fill_squares_2d',
-        # do_2d = True,
         field_width = field_width,
-        # do_transpose = True,
     )
-    # ds_raw = get_arc_puzzle_ds_as_flat_ds(
-    #     puzzle_name=PuzzleNames.FILL_SIMPLE_OPENED_SHAPE,
-    #     nb_samples=dcfg.num_samples,
-    #     max_field_width=dcfg.max_width,
-    #     pad_token_id=mcfg.pad_token_id,
-    #     ignore_label_id=mcfg.ignore_id
-    # )
     train_dl, val_dl = get_dataloaders_for_flat_seq_cls(
         ds_raw,
-        ignore_label_id = mcfg.ignore_id,
-        sep_token_id = mcfg.qa_sep_token_id,
-        pad_token_id = mcfg.pad_token_id,
+        ignore_label_id = mcfg_e.ignore_id,
+        sep_token_id = mcfg_e.qa_sep_token_id,
+        pad_token_id = mcfg_e.pad_token_id,
         split_ratio = 1 - dcfg.val_frac,
         batch_size_train = tcfg.batch_size,
         batch_size_eval = tcfg.batch_size,
@@ -307,21 +330,21 @@ def main(
     )
     epoch = 0
     while 1 :
-        tr = train_one_epoch(model, train_dl, optimizer, device = tcfg.device)
+        tr = train_one_epoch(model, train_dl, optimizer, max_field_width=field_width, device=tcfg.device)
         l  = f"Epoch {epoch:02d} | "
         for k, v in tr.items() : 
             l += f"{k} {v:.4f} | "
         log(f"{l}")
 
-        nb_refinement_steps_back = mcfg.nb_refinement_steps
-        mcfg.nb_refinement_steps = 4
+        # nb_refinement_steps_back = mcfg.nb_refinement_steps
+        # mcfg.nb_refinement_steps = 4
         l  = f"Epoch {epoch:02d} | "
         with torch.no_grad():
             va = evaluate(model, val_dl, show_nb_first_preds=1, max_field_width=dcfg.max_width, device = tcfg.device)
         for k, v in va.items() : 
             l += f"{k} {v:.4f} | "
         log(f"{l}")
-        mcfg.nb_refinement_steps = nb_refinement_steps_back
+        # mcfg.nb_refinement_steps = nb_refinement_steps_back
 
         epoch += 1
 
