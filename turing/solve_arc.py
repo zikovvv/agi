@@ -1,7 +1,7 @@
 from show import *
 
 idx = 1
-show_example(list(dataset.values())[idx])
+show_examples(list(dataset.values())[idx])
 
 
 
