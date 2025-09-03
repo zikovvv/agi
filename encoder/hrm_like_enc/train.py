@@ -21,7 +21,7 @@ from datasets import Dataset
 import torch
 from torch import nn
 import matplotlib.pyplot as plt
-from show import plot_eval_batch
+from show import plot_batch
 
 def train_one_epoch(
     model: nn.Module,
@@ -191,7 +191,7 @@ def evaluate(
 
         if showed < show_nb_first_preds:
             field_area = max_field_width * max_field_width
-            plot_eval_batch(
+            plot_batch(
             [
                 input_ids[:10, :field_area],
                 labels[:10, field_area:],
@@ -303,6 +303,7 @@ def main(
         batch_size_train = tcfg.batch_size,
         batch_size_eval = tcfg.batch_size,
         device = tcfg.device,
+        add_labels_to_inputs=False,
         add_sep=False
     )
     epoch = 0

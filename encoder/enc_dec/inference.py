@@ -6,7 +6,7 @@ import collections
 from typing import List, Set, Tuple
 import torch
 from common import *
-from show import plot_eval_batch
+from show import plot_batch
 
 all_permutations = [
     list(itertools.permutations([_ for _ in range(nb)], nb)) for nb in range(1, 11)
@@ -97,7 +97,7 @@ def vote_for_actual_answer(
     # print(field_width)
     # exit()
     if debug:
-        plot_eval_batch(
+        plot_batch(
             [
                 restored_preds[0][:10,field_width ** 2:],
                 restored_preds[1][:10,field_width ** 2:],
@@ -139,7 +139,7 @@ def augmented_inference_batched_with_voting(
 
     field_width = int((labels.shape[1] // 2)**0.5)
     if debug :
-        plot_eval_batch(
+        plot_batch(
             [
                 input_ids_p[:small_batch_size, :field_width ** 2],
                 # input_ids_p[:small_batch_size, field_width ** 2:],
@@ -211,7 +211,7 @@ def augmented_inference_batched(
 
     field_width = int((labels.shape[1] // 2)**0.5)
     if debug :
-        plot_eval_batch(
+        plot_batch(
             [
                 input_ids_p[:small_batch_size, :field_width ** 2],
                 input_ids_p[:small_batch_size, field_width ** 2:],

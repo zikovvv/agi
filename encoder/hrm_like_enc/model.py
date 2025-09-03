@@ -8,6 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from encoder.hrm_like_enc.components import TransformerBlockHRM
 from encoder.hrm_like_enc.config import EncoderConfig
+from common import *
 
 
 class EncoderModel(nn.Module):
@@ -84,10 +85,6 @@ class EncoderModel(nn.Module):
 
 
 class EncoderForCLS(nn.Module):
-    """
-    Adds a tied-weight LM head to predict the true token at positions marked "missing".
-    If labels is provided, computes cross-entropy loss (ignore_index = -100).
-    """
     def __init__(self, cfg: EncoderConfig):
         super().__init__()
         self.cfg = cfg
@@ -104,6 +101,39 @@ class EncoderForCLS(nn.Module):
         out = {"logits": logits, "hidden_states": h}
         loss = F.cross_entropy(
             logits.view(-1, self.cfg.vocab_size),
+            labels.view(-1),
+            ignore_index=self.cfg.ignore_id,
+        )
+        out["loss"] = loss
+        return out
+
+class EncoderForValidation(nn.Module) :
+    def __init__(self, cfg: EncoderConfig):
+        super().__init__()
+        self.cfg = cfg
+        self.encoder = EncoderModel(cfg)
+        self.lm_head = nn.Linear(cfg.d_model, 2, bias=True)
+        
+    def forward(
+        self,
+        input_ids: torch.Tensor,        # [B, L]
+        labels: torch.Tensor,           # [B, L], -100 to ignore, values are 1 or 0
+    ) -> Dict[str, torch.Tensor]:
+        log_debug(f'{input_ids.shape = }, {labels.shape = }, {input_ids.dtype = }, {labels.dtype = }')
+        h : torch.Tensor = self.encoder(input_ids)  # [B,L,D]
+        logits : torch.Tensor = self.lm_head(h)     # [B,L,V]
+        out = {"logits": logits, "hidden_states": h}
+        log_debug(f'{logits.shape = }, {labels.shape = }, {logits.dtype = }, {labels.dtype = }')
+        
+        
+        # Optional sanity checks (helpful during dev)
+        assert logits.dim() == 3 and logits.size(-1) == 2, f"Unexpected logits shape: {logits.shape}"
+        assert labels.shape == logits.shape[:2], f"Labels {labels.shape} must match logits[:2] {logits.shape[:2]}"
+        assert isinstance(self.cfg.ignore_id, int), f"ignore_id must be int, got {type(self.cfg.ignore_id)}"
+        assert self.cfg.ignore_id == -100, f"Expected ignore_id -100, got {self.cfg.ignore_id}"
+
+        loss = F.cross_entropy(
+            logits.view(-1, 2),
             labels.view(-1),
             ignore_index=self.cfg.ignore_id,
         )

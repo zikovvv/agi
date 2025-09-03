@@ -22,7 +22,7 @@ from datasets import Dataset
 import torch
 from torch import nn
 import matplotlib.pyplot as plt
-from show import plot_eval_batch
+from show import plot_batch
 
 def train_one_epoch(
     model: nn.Module,
@@ -203,7 +203,7 @@ def evaluate(
         # total_labels_vote += nb_labels_vote
 
         if showed < show_nb_first_preds:
-            plot_eval_batch(
+            plot_batch(
             [
                 input_ids[:10, :],
                 labels[:10, :],
