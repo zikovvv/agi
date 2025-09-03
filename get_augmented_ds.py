@@ -33,7 +33,7 @@ def ex1 ():
     
     
 
-    show_example(all_augmentations[:15])
+    show_examples(all_augmentations[:15])
     
     augmented_ds : List[List[List[Tuple[np.ndarray, np.ndarray]]]] = [
         [augment_example_geometry_and_colors(t, a) for t, a in dataset[ex_id]]
@@ -48,7 +48,7 @@ def ex1 ():
     print(len(augmented_ds))
     print(len(augmented_ds[j]))
     print(len(augmented_ds[j][0]))
-    show_example(augmented_ds[j][0][:20])
+    show_examples(augmented_ds[j][0][:20])
 
 
 def get_full_ds() :
@@ -75,7 +75,7 @@ def get_full_ds() :
             json.dump(augmented_ds_serializable, f)
         
     
-    show_example(augmented_ds[3][0][:15])
+    show_examples(augmented_ds[3][0][:15])
     
 if __name__ == "__main__":
     if 1 :

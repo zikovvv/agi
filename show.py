@@ -5,9 +5,8 @@ from typing import Dict, Tuple, List
 
 import torch
 
-from get_ds import get_ds
 
-def show_example(example : List[Tuple[np.ndarray, np.ndarray]]) :
+def show_examples(example : List[Tuple[np.ndarray, np.ndarray]]) :
     n = len(example)
     fig, axs = plt.subplots(2, n, figsize=(3*n, 6))
     for i, (inp, out) in enumerate(example) :
@@ -24,30 +23,21 @@ def show_example(example : List[Tuple[np.ndarray, np.ndarray]]) :
 import random
 
 
-def plot_eval_batch(
-    to_show : List[torch.Tensor],
-    max_field_width : int = 40,
-    *,
-    max_color: int = 30,
+def plot_batch(
+    data : List[torch.Tensor],
+    height : int,
+    width : int,
     cmap: str = "tab20",
     cell_inches: float = 2.0,      # size of each small image (inches)
     dpi: int = 400,                # higher -> sharper
     show_row_labels: bool = True,  # overlay row labels instead of titles (no extra space)
 ) -> None:
-    """
-    4 x B grid with NO whitespace.
-    Rows: [Input ids, Actual labels, Predicted labels, Predicted on inputs]
-    Columns: all batch elements.
-    """
-    max_field_area = max_field_width * max_field_width
-    # for a in to_show :
-    #     print(a.shape)
     fields = [
-        f.view(f.shape[0], max_field_width, max_field_width) for f in to_show
+        f.view(f.shape[0], height, width) for f in data
     ]
 
     B, H, W = fields[0].shape
-    nrows, ncols = len(to_show), B
+    nrows, ncols = len(data), B
     fig = plt.figure(figsize=(cell_inches * ncols, cell_inches * nrows), dpi=dpi)
     gs = fig.add_gridspec(nrows, ncols, wspace=0.0, hspace=0.0)
 

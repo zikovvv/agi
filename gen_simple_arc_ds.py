@@ -51,7 +51,7 @@ def main() :
     name = 'e8dc4411'
     examples = gen_arc_puzzle_ex(name)
     examples = examples[:10] 
-    show_example(examples)
+    show_examples(examples)
     
 if __name__ == "__main__":
     main()

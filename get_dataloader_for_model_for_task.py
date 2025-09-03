@@ -470,6 +470,7 @@ def get_dataloaders_for_flat_seq_cls(
     batch_size_train : int,
     batch_size_eval : int,
     add_sep : bool,
+    add_labels_to_inputs : bool,
     device : str
 ) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
     def get_as_input_and_labels_pairs() -> List[Tuple[torch.Tensor, torch.Tensor]]:
@@ -491,7 +492,11 @@ def get_dataloaders_for_flat_seq_cls(
             if add_sep:
                 input_ids[input_tensor.shape[0]] = sep_token_id
             # Fill masked tokens for output part
-            input_ids[input_tensor.shape[0] + sep_shift:] = pad_token_id
+            if add_labels_to_inputs:
+                input_ids[input_tensor.shape[0] + sep_shift:] = output_tensor
+            else:
+                input_ids[input_tensor.shape[0] + sep_shift:] = pad_token_id
+            
             # Set labels for output part only
             labels[input_tensor.shape[0] + sep_shift:] = output_tensor
             
@@ -571,6 +576,7 @@ def ex3():
         batch_size_eval,
         add_sep=True,
         device=device,
+        add_labels_to_inputs=False
     )
 
     for batch in train_dl:
