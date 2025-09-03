@@ -72,15 +72,15 @@ def train_batch(
     assert B_ * CP == B
 
 
-    if bid < nb_steps_to_visualize :
-        plot_batch(
-            data = [
-                color_input_ids[:10, :],
-                color_labels[:10, :],
-            ],
-            height=H,
-            width=W
-        )
+    # if bid < nb_steps_to_visualize :
+    #     plot_batch(
+    #         data = [
+    #             color_input_ids[:10, :],
+    #             color_labels[:10, :],
+    #         ],
+    #         height=H,
+    #         width=W
+    #     )
     
     
     main_cls = torch.ones_like(color_input_ids, device=color_labels.device) # 1 is classified right or ignored,0 is bad and needs refinement
@@ -89,15 +89,15 @@ def train_batch(
     main_cls_is_wrong_mask = main_cls == 0
     main_color_guess = color_input_ids.clone()
 
-    if bid < nb_steps_to_visualize :
-        plot_batch(
-            data = [
-                main_cls[:10, :],
-                main_color_guess[:10, :],
-            ],
-            height=H,
-            width=W
-        )
+    # if bid < nb_steps_to_visualize :
+    #     plot_batch(
+    #         data = [
+    #             main_cls[:10, :],
+    #             main_color_guess[:10, :],
+    #         ],
+    #         height=H,
+    #         width=W
+    #     )
     
 
     for it in range(NC) : # iterate for nb colors in original sample because we need to fill all of them
@@ -141,16 +141,16 @@ def train_batch(
         main_cls_is_wrong_mask = main_cls == 0
 
 
-        if bid < nb_steps_to_visualize :
-            plot_batch(
-                data = [
-                    main_color_guess[:10, :],
-                    main_cls[:10, :],
-                    # main_cls_is_wrong_mask[:10, :],
-                ],
-                height=H,
-                width=W
-            )
+        # if bid < nb_steps_to_visualize :
+        #     plot_batch(
+        #         data = [
+        #             main_color_guess[:10, :],
+        #             main_cls[:10, :],
+        #             # main_cls_is_wrong_mask[:10, :],
+        #         ],
+        #         height=H,
+        #         width=W
+        #     )
         
 
 
