@@ -28,8 +28,9 @@ class EncoderConfig:
     # use_2d_rope_attn: bool = False
     # rope_2d_attn_row_width: int = 40
     use_transposed_rope_for_2d_vertical_orientation: bool = False
-    field_width_for_t_rope: int = 40
-    field_height_for_t_rope: int = 80
+    use_axial_rope: bool = False
+    field_width: int = 40
+    field_height: int = 80
 
     # Grid limits
     max_len: int = 5000

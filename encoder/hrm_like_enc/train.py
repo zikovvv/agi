@@ -28,6 +28,7 @@ def train_one_epoch(
     loader: DataLoader,
     optimizer: torch.optim.Optimizer,
     device : str = 'cpu',
+    max_nb_aug : int = 5
 ) -> Dict[str, float]:
     ignored_id: int = model.cfg.ignore_id  # type: ignore
     pad_token_id: int = model.cfg.pad_token_id  # type: ignore
@@ -42,7 +43,7 @@ def train_one_epoch(
         colors_orig, colors_perms, input_ids, labels = augment_colors_batch(
             input_ids,
             labels,
-            max_permutations=5,
+            max_permutations=max_nb_aug,
             ignore_label_id=ignored_id,
             pad_token_id=pad_token_id,
             add_orig=True
@@ -180,7 +181,7 @@ def evaluate(
             labels = labels,
             ignore_label_id = ignored_id,
             pad_token_id = pad_token_id,
-            debug = it < show_nb_first_preds
+            debug = False
         )
         total_cor_aug += nb_cor_aug
         total_labels_aug += nb_labels_aug
@@ -192,13 +193,17 @@ def evaluate(
         if showed < show_nb_first_preds:
             field_area = max_field_width * max_field_width
             plot_batch(
-            [
-                input_ids[:10, :field_area],
-                labels[:10, field_area:],
-                # preds[:10, field_area:],
-                preds_1[:10, field_area:],
-                preds_voted[:10, field_area:]
-            ], max_field_width=max_field_width) # type: ignore
+                data=[
+                    input_ids[:10, :field_area],
+                    labels[:10, field_area:],
+                    # preds[:10, field_area:],
+                    preds_1[:10, field_area:],
+                    preds_voted[:10, field_area:]
+                ],
+                height=max_field_width,
+                width=max_field_width,
+            )
+
             showed += 1
 
         total_steps += 1
@@ -245,32 +250,36 @@ def main(
         seed=123,
         val_frac=0.1,
         test_frac=0.0,
-        num_samples=200,
+        num_samples=100,
         seq_len=seq_len,
         max_width=field_width
     ) if dcfg is None else dcfg
     tcfg = TrainConfig(
-        batch_size=8,
+        batch_size=4,
         lr=3e-4
     ) if tcfg is None else tcfg
     mcfg = EncoderConfig(
         d_model=128,
         n_head=8,
-        d_head=32,
+        d_head=64,
         num_layers=4,
         nb_refinement_steps=1,
         nb_last_trained_steps=1,
         dim_feedforward=256,
         vocab_size=200,
         max_len=4000,
+        
         use_cnn=False,
-        enable_pseudo_diffusion_inner=True,
-        enable_pseudo_diffusion_outer=True,
+        enable_pseudo_diffusion_inner=False,
+        enable_pseudo_diffusion_outer=False,
         feed_first_half=False,
 
         use_transposed_rope_for_2d_vertical_orientation=False,
-        field_width_for_t_rope=field_width,
-        field_height_for_t_rope=field_width * 2,
+        field_width=field_width,
+        field_height=field_width * 2,
+        
+        
+        use_axial_rope = True
     ) if mcfg is None else mcfg
 
     # device = tcfg.device
@@ -282,10 +291,13 @@ def main(
         seq_len=dcfg.seq_len,
         nb_samples=dcfg.num_samples,
         nb_cls=10,
-        task='fill_squares_2d',
-        # do_2d = True,
+        task='fill_between_pieces_with_color_from_example',
+
         field_width = field_width,
-        # do_transpose = True,
+
+
+        do_2d = True,
+        do_transpose = False,
     )
     # ds_raw = get_arc_puzzle_ds_as_flat_ds(
     #     puzzle_name=PuzzleNames.FILL_SIMPLE_OPENED_SHAPE,
@@ -308,17 +320,17 @@ def main(
     )
     epoch = 0
     while 1 :
-        tr = train_one_epoch(model, train_dl, optimizer, device = tcfg.device)
+        tr = train_one_epoch(model, train_dl, optimizer, device = tcfg.device, max_nb_aug = 2)
         l  = f"Epoch {epoch:02d} | "
         for k, v in tr.items() : 
             l += f"{k} {v:.4f} | "
         log(f"{l}")
 
         nb_refinement_steps_back = mcfg.nb_refinement_steps
-        mcfg.nb_refinement_steps = 4
+        mcfg.nb_refinement_steps = 1
         l  = f"Epoch {epoch:02d} | "
         with torch.no_grad():
-            va = evaluate(model, val_dl, show_nb_first_preds=1, max_field_width=dcfg.max_width, device = tcfg.device)
+            va = evaluate(model, val_dl, show_nb_first_preds=0, max_field_width=dcfg.max_width, device = tcfg.device)
         for k, v in va.items() : 
             l += f"{k} {v:.4f} | "
         log(f"{l}")

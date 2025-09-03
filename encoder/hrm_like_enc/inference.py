@@ -98,12 +98,13 @@ def vote_for_actual_answer(
     # exit()
     if debug:
         plot_batch(
-            [
+            height=field_width,
+            width=field_width,
+            data = [
                 restored_preds[0][:10,field_width ** 2:],
                 restored_preds[1][:10,field_width ** 2:],
                 restored_preds[2][:10,field_width ** 2:],
             ],
-            max_field_width=field_width,
             show_row_labels=True
         )
 
@@ -140,7 +141,9 @@ def augmented_inference_batched_with_voting(
     field_width = int((labels.shape[1] // 2)**0.5)
     if debug :
         plot_batch(
-            [
+            height=field_width,
+            width=field_width,
+            data=[
                 input_ids_p[:small_batch_size, :field_width ** 2],
                 # input_ids_p[:small_batch_size, field_width ** 2:],
                 input_ids_p[small_batch_size:small_batch_size*2, :field_width ** 2],
@@ -152,7 +155,6 @@ def augmented_inference_batched_with_voting(
                 # preds_all[:small_batch_size, :field_width ** 2],
                 # preds_all[small_batch_size:small_batch_size*2, :field_width ** 2],
             ],
-            max_field_width=field_width,
             show_row_labels=True
         )
     assert input_ids_p[:small_batch_size, field_width ** 2:][0][0] == pad_token_id, input_ids_p[:small_batch_size, field_width ** 2:][0][0] 
@@ -212,7 +214,9 @@ def augmented_inference_batched(
     field_width = int((labels.shape[1] // 2)**0.5)
     if debug :
         plot_batch(
-            [
+            height=field_width,
+            width=field_width,
+            data=[
                 input_ids_p[:small_batch_size, :field_width ** 2],
                 input_ids_p[:small_batch_size, field_width ** 2:],
                 input_ids_p[small_batch_size:small_batch_size*2, :field_width ** 2],
@@ -224,7 +228,6 @@ def augmented_inference_batched(
                 # preds_all[:small_batch_size, :field_width ** 2],
                 # preds_all[small_batch_size:small_batch_size*2, :field_width ** 2],
             ],
-            max_field_width=field_width,
             show_row_labels=True
         )
     assert input_ids_p[:small_batch_size, field_width ** 2:][0][0] == pad_token_id, input_ids_p[:small_batch_size, field_width ** 2:][0][0] 
