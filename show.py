@@ -2,7 +2,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 # from get_ds import dataset
 from typing import Dict, Tuple, List
-
 import torch
 
 
@@ -27,11 +26,10 @@ def plot_batch(
     data: List[torch.Tensor],
     height: int,
     width: int,
+    show_to_window: bool,
     cmap: str = "tab20",
     cell_inches: float = 2.0,      # size of each small image (inches)
     dpi: int = 400,                # higher -> sharper
-    show_row_labels: bool = True,  # overlay row labels instead of titles (no extra space),
-    show: bool = True
 ) -> None:
     fields = [f.view(f.shape[0], height, width) for f in data]
 
@@ -64,17 +62,8 @@ def plot_batch(
             wandb.log({"plot_batch": wandb.Image(fig)})
     except Exception:
         pass
-    if show:
+    if show_to_window:
         plt.show()
     plt.close()
     
 
-# def main():
-#     dataset = get_ds()
-#     for example in random.sample(list(dataset.values()), len(dataset)):
-#         show_example(example)
-#         if plt.waitforbuttonpress():
-#             plt.close('all')
-#             break
-# if __name__ == "__main__":
-#     main()

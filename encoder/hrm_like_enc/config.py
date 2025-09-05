@@ -58,11 +58,31 @@ class DatasetConfig:
     test_frac: float = 0.0    # set >0 for a held-out test split
     seq_len : int = 15
     max_width :int = 40
+    expand: bool = False
+    add_labels_to_inputs: bool = False
+    add_sep: bool = False  # whether to add a sep token between input and labels
 
 @dataclass
 class TrainConfig:
     nb_plots_on_val : int = 2
-    epochs: int = 50
-    batch_size: int = 16
+    nb_max_epochs: int = 50
     lr: float = 3e-4
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
+
+
+    t_batch_size: int = 32
+    t_show_nb_first_preds: int = 2
+    t_nb_max_self_correction: int = 15
+    t_show_in_window: bool = False
+    t_max_nb_aug: int = 5
+    
+    v_batch_size: int = 8
+    v_nb_max_self_correction : int = 10
+    v_do_augmented_inference : bool = True
+    v_show_in_window : bool = False
+    v_max_nb_aug : int = 5
+    v_show_nb_first_preds : int = 2
+    
+    
+    
+

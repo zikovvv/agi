@@ -81,7 +81,8 @@ def vote_for_actual_answer(
     labels_orig: torch.Tensor,
     preds_permutated: List[torch.Tensor],
     vocab_size: int,
-    debug : bool = False
+    show_to_window: bool,
+    debug: bool = False
 ) -> torch.Tensor:
     log_debug(f'{labels_orig.shape = }, {preds_permutated[0].shape = }, {vocab_size = }, {len(colors_orig) = }, {len(colors_perms) = }')
     # preds_counter : torch.Tensor = torch.zeros((*labels_orig.shape, vocab_size), dtype=torch.int32)
@@ -100,12 +101,12 @@ def vote_for_actual_answer(
         plot_batch(
             height=field_width,
             width=field_width,
-            data = [
-                restored_preds[0][:10,field_width ** 2:],
-                restored_preds[1][:10,field_width ** 2:],
-                restored_preds[2][:10,field_width ** 2:],
+            data=[
+                restored_preds[0][:10, field_width ** 2:],
+                restored_preds[1][:10, field_width ** 2:],
+                restored_preds[2][:10, field_width ** 2:],
             ],
-            show_row_labels=True
+            show_to_window=show_to_window,
         )
 
     preds_voted = preds_counter.argmax(dim=-1)
@@ -118,7 +119,9 @@ def augmented_inference_batched_with_voting(
     ignore_label_id: int,
     pad_token_id : int,
     vocab_size: int,
-    debug: bool = False
+    max_aug :int,
+    show_to_window : bool,
+    debug: bool = False,
 ):
     device = input_ids.device
     log_debug(f'{input_ids.shape = }, {labels.shape = }, {ignore_label_id = }')
@@ -126,10 +129,10 @@ def augmented_inference_batched_with_voting(
     colors_orig, colors_perms, input_ids_p, labels_p = augment_colors_batch(
         input_ids.cpu(),
         labels.cpu(),
-        max_permutations=20,
+        max_permutations=max_aug,
         ignore_label_id=ignore_label_id,
         pad_token_id=pad_token_id,
-        add_orig=False
+        add_orig=False,
     )
     input_ids_p = input_ids_p.to(device)
     labels_p = labels_p.to(device)
@@ -156,7 +159,7 @@ def augmented_inference_batched_with_voting(
                 # preds_all[:small_batch_size, :field_width ** 2],
                 # preds_all[small_batch_size:small_batch_size*2, :field_width ** 2],
             ],
-            show_row_labels=True
+            show_to_window=show_to_window,
         )
     assert input_ids_p[:small_batch_size, field_width ** 2:][0][0] == pad_token_id, input_ids_p[:small_batch_size, field_width ** 2:][0][0] 
     assert input_ids_p[small_batch_size:small_batch_size*2, field_width ** 2:][0][0] == pad_token_id, input_ids_p[small_batch_size:small_batch_size*2, field_width ** 2:][0][0]
@@ -178,7 +181,8 @@ def augmented_inference_batched_with_voting(
         labels_orig=labels,
         preds_permutated=preds_p_split,
         vocab_size=vocab_size,
-        debug = debug
+        show_to_window=show_to_window,
+        debug=debug
     )
     nb_l = (labels != ignore_label_id).sum().item()
     nb_voted = (preds_voted == labels).sum().item()
@@ -193,8 +197,9 @@ def augmented_inference_batched(
     input_ids: torch.Tensor,
     labels: torch.Tensor,
     ignore_label_id: int,
-    pad_token_id : int,
-    debug: bool = False
+    pad_token_id: int,
+    show_to_window: bool,
+    debug: bool
 ):
     log_debug(f'{input_ids.shape = }, {labels.shape = }, {ignore_label_id = }')
     small_batch_size = input_ids.shape[0]
@@ -229,7 +234,7 @@ def augmented_inference_batched(
                 # preds_all[:small_batch_size, :field_width ** 2],
                 # preds_all[small_batch_size:small_batch_size*2, :field_width ** 2],
             ],
-            show_row_labels=True
+            show_to_window=show_to_window
         )
     assert input_ids_p[:small_batch_size, field_width ** 2:][0][0] == pad_token_id, input_ids_p[:small_batch_size, field_width ** 2:][0][0] 
     assert input_ids_p[small_batch_size:small_batch_size*2, field_width ** 2:][0][0] == pad_token_id, input_ids_p[small_batch_size:small_batch_size*2, field_width ** 2:][0][0]
