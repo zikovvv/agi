@@ -12,6 +12,7 @@ class EncoderConfig:
     num_layers: int = 2
     dropout: float = 0.1
     norm_first: bool = True
+    use_emb_norm: bool = False
     layer_norm_eps: float = 1e-5
     rope_theta: float = 10000.0
     

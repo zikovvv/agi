@@ -44,10 +44,11 @@ class EncoderModel(nn.Module):
                 if self.cfg.feed_first_half :
                     h[:, :first_half_copy.shape[1]] = first_half_copy
             return h
-        else :    
+        else :
+            hidden = torch.zeros_like(h)    
             for block in self.blocks :
-                h = block(h)
-            return h
+                hidden = block(hidden + h)
+            return hidden
 
 
     def forward(
@@ -55,6 +56,8 @@ class EncoderModel(nn.Module):
         input_ids: torch.Tensor,        # [B, L]
     ) -> torch.Tensor:
         inps = self.token_embed(input_ids)  # [B,L,D]
+        if self.cfg.use_emb_norm :
+            inps = self.embed_ln(inps)
         if self.cfg.enable_pseudo_diffusion_outer :
             assert self.cfg.nb_refinement_steps > 0
             assert self.cfg.nb_last_trained_steps > 0

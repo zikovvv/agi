@@ -21,20 +21,19 @@ def show_examples(example : List[Tuple[np.ndarray, np.ndarray]]) :
     plt.show()
     
 import random
-
+import wandb
 
 def plot_batch(
-    data : List[torch.Tensor],
-    height : int,
-    width : int,
+    data: List[torch.Tensor],
+    height: int,
+    width: int,
     cmap: str = "tab20",
     cell_inches: float = 2.0,      # size of each small image (inches)
     dpi: int = 400,                # higher -> sharper
-    show_row_labels: bool = True,  # overlay row labels instead of titles (no extra space)
+    show_row_labels: bool = True,  # overlay row labels instead of titles (no extra space),
+    show: bool = True
 ) -> None:
-    fields = [
-        f.view(f.shape[0], height, width) for f in data
-    ]
+    fields = [f.view(f.shape[0], height, width) for f in data]
 
     B, H, W = fields[0].shape
     nrows, ncols = len(data), B
@@ -46,20 +45,29 @@ def plot_batch(
         # Ensure numpy
         if isinstance(arr, torch.Tensor):
             arr = arr.detach().cpu().numpy()
-        ax.imshow(arr, vmin=0, vmax=11,  cmap=cmap)#, interpolation="nearest")
+        ax.imshow(arr, vmin=0, vmax=11, cmap=cmap)
         ax.set_axis_off()
-        # Keep pixels square & tight
         ax.set_aspect("equal", adjustable="box")
 
     # Fill grid
     for j in range(ncols):
-        for i in range(nrows) :
+        for i in range(nrows):
             _show(fig.add_subplot(gs[i, j]), fields[i][j])
 
     # Absolutely no outer padding
     fig.subplots_adjust(left=0, right=1, top=1, bottom=0, wspace=0, hspace=0)
 
-    plt.show()
+    # Send to Weights & Biases if a run is active
+    try:
+        run = getattr(wandb, "run", None)
+        if run is not None and not getattr(run, "_is_finished", False):
+            wandb.log({"plot_batch": wandb.Image(fig)})
+    except Exception:
+        pass
+    if show:
+        plt.show()
+    plt.close()
+    
 
 # def main():
 #     dataset = get_ds()

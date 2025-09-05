@@ -50,45 +50,65 @@ def rms_norm(hidden_states: torch.Tensor, variance_epsilon: float) -> torch.Tens
     return hidden_states.to(input_dtype)
 
 
-def rotate_half(x: torch.Tensor):
-    """Rotates half the hidden dims of the input."""
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2 :]
-    return torch.cat((-x2, x1), dim=-1)
+# def rotate_half(x: torch.Tensor):
+#     """Rotates half the hidden dims of the input."""
+#     x1 = x[..., : x.shape[-1] // 2]
+#     x2 = x[..., x.shape[-1] // 2 :]
+#     return torch.cat((-x2, x1), dim=-1)
 
 
-def apply_rotary_pos_emb(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor):
-    # q, k: [bs, seq_len, num_heads, head_dim]
-    # cos, sin: [seq_len, head_dim]
-    orig_dtype = q.dtype
-    q = q.to(cos.dtype)
-    k = k.to(cos.dtype)
-    sin = sin[:q.size(1)]
-    cos = cos[:q.size(1)]
+# def apply_rotary_pos_emb(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor):
+#     # q, k: [bs, seq_len, num_heads, head_dim]
+#     # cos, sin: [seq_len, head_dim]
+#     orig_dtype = q.dtype
+#     q = q.to(cos.dtype)
+#     k = k.to(cos.dtype)
+#     sin = sin[:q.size(1)]
+#     cos = cos[:q.size(1)]
 
-    q_embed = (q * cos.unsqueeze(-2)) + (rotate_half(q) * sin.unsqueeze(-2))
-    k_embed = (k * cos.unsqueeze(-2)) + (rotate_half(k) * sin.unsqueeze(-2))
+#     q_embed = (q * cos.unsqueeze(-2)) + (rotate_half(q) * sin.unsqueeze(-2))
+#     k_embed = (k * cos.unsqueeze(-2)) + (rotate_half(k) * sin.unsqueeze(-2))
 
-    return q_embed.to(orig_dtype), k_embed.to(orig_dtype)
+#     return q_embed.to(orig_dtype), k_embed.to(orig_dtype)
 
 
-class CastedLinear(nn.Module):
-    def __init__(self,
-                 in_features: int,
-                 out_features: int,
-                 bias: bool):
-        super().__init__()
-        # Truncated LeCun normal init
-        self.weight = nn.Parameter(
-            trunc_normal_init_(torch.empty((out_features, in_features)), std=1.0 / (in_features ** 0.5))
-        )
-        self.bias = None
-        if bias:
-            # Zero init bias
-            self.bias = nn.Parameter(torch.zeros((out_features, )))
 
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
-        return F.linear(input, self.weight.to(input.dtype), bias=self.bias.to(input.dtype) if self.bias is not None else None)
+def apply_rotary_pos_emb(
+    x: torch.Tensor,          # [B, L, H, D] (works for Q or K)
+    cos: torch.Tensor,        # [S,D] or [S,H,D] or [S,D] or [S,D/2]
+    sin: torch.Tensor,        # same shape rules as cos
+    inplace: bool = False,    # if True, write result into x (slightly faster)
+) -> torch.Tensor:    
+    assert x.dim() == 4, f"x must be [B,L,H,D], got {tuple(x.shape)}"
+    B, L, H, D = x.shape
+    s = f'{B= }, {L = }, {H= }, {D= }'
+    assert sin.dim() == 2, (sin.shape, sin.dim())
+    assert (D % 2) == 0, f"D must be even, got {D}"
+    assert sin.shape == cos.shape == (L, D)
+
+    # --- split x into (even, odd) channel pairs and rotate ---
+    x_even = x[..., ::2]                    # [B, L, H, D/2]
+    x_odd  = x[..., 1::2]                   # [B, L, H, D/2]
+    assert x_even.shape == x_odd.shape == (B, L, H, D // 2)
+    cos_unsqueezed = cos.unsqueeze(0).unsqueeze(2)  # [1, L, 1, D/2]
+    assert cos_unsqueezed.shape == (1, L, 1, D)
+    sin_unsqueezed = sin.unsqueeze(0).unsqueeze(2)  # [1, L, 1, D/2]
+    assert sin_unsqueezed.shape == (1, L, 1, D)
+
+    cos_upper = cos_unsqueezed[..., :D//2] # [1, L, 1, D//2]
+    cos_lower = cos_unsqueezed[..., D//2:] # [1, L, 1, D//2]
+    sin_upper = sin_unsqueezed[..., :D//2] # [1, L, 1, D//2]
+    sin_lower = sin_unsqueezed[..., D//2:] # [1, L, 1, D//2]
+    assert cos_upper.shape == (1, L, 1, D // 2), (cos_upper.shape, (1, L, 1, D // 2), s)
+    assert cos_lower.shape == (1, L, 1, D // 2), (cos_lower.shape, (1, L, 1, D // 2), s)
+    assert sin_upper.shape == (1, L, 1, D // 2), (sin_upper.shape, (1, L, 1, D // 2), s)
+    assert sin_lower.shape == (1, L, 1, D // 2), (sin_lower.shape, (1, L, 1, D // 2), s)
+
+    # Broadcast cos/sin over B; they are already [1,L,(1 or H),D/2]
+    # Rotation: (x_even,x_odd) -> (x_even*cos - x_odd*sin, x_even*sin + x_odd*cos)
+    x[..., ::2] = x_even * cos_upper - x_odd * sin_upper
+    x[..., 1::2] = x_even * sin_lower + x_odd * cos_lower
+    return x
 
 
 class SwiGLU(nn.Module):
@@ -96,31 +116,13 @@ class SwiGLU(nn.Module):
         super().__init__()
         inter = _find_multiple(round(expansion * hidden_size * 2 / 3), 256)
 
-        self.gate_up_proj = CastedLinear(hidden_size, inter * 2, bias=False)
-        self.down_proj    = CastedLinear(inter, hidden_size, bias=False)
+        self.gate_up_proj = nn.Linear(hidden_size, inter * 2, bias=False)
+        self.down_proj    = nn.Linear(inter, hidden_size, bias=False)
 
     def forward(self, x):
         gate, up = self.gate_up_proj(x).chunk(2, dim=-1)
         return self.down_proj(F.silu(gate) * up)
     
-class CastedEmbedding(nn.Module):
-    def __init__(self,
-                 num_embeddings: int,
-                 embedding_dim: int,
-                 init_std: float,
-                 cast_to: torch.dtype):
-        super().__init__()
-        self.cast_to = cast_to
-
-        # Truncated LeCun normal init
-        self.embedding_weight = nn.Parameter(
-            trunc_normal_init_(torch.empty((num_embeddings, embedding_dim)), std=init_std)
-        )
-        
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
-        return F.embedding(input, self.embedding_weight.to(self.cast_to))
-
-
 class RotaryEmbedding(nn.Module):
     def __init__(self, dim, max_position_embeddings, base, device=None):
         super().__init__()
@@ -129,54 +131,23 @@ class RotaryEmbedding(nn.Module):
         inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32, device=device) / dim))
         t = torch.arange(max_position_embeddings, dtype=torch.float32, device=device)
         freqs = torch.outer(t, inv_freq)
-
+        
         # Different from paper, but it uses a different permutation in order to obtain the same calculation
         emb = torch.cat((freqs, freqs), dim=-1)
+        
+        # log(f'{freqs.shape = }, {t.shape = }, {inv_freq.shape = }, {emb.shape = }')        
         self.register_buffer("cos_cached", emb.cos())
         self.register_buffer("sin_cached", emb.sin())
-        log(f'{freqs.shape = }, {self.cos_cached.shape = }, {self.sin_cached.shape = }')
+        # log(f'{freqs.shape = }, {self.cos_cached.shape = }, {self.sin_cached.shape = }')
 
     def forward(self) -> Tuple[torch.Tensor, torch.Tensor]:
         return self.cos_cached, self.sin_cached # type: ignore
 
-class LearnedROPE(nn.Module) :
-
-    def __init__(self, dim, max_position_embeddings, base, device=None):
-        super().__init__()
-        
-        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32, device=device) / dim))
-        t = torch.arange(max_position_embeddings, dtype=torch.float32, device=device)
-        freqs = torch.outer(t, inv_freq)
-        freqs = torch.cat((freqs, freqs), dim=-1)
-        
-        # now fill freqs with random nubers for experiment
-        freq_mean = freqs.mean()
-        freqs = torch.randn_like(freqs) * freq_mean
-        
-        self.initial_freqs_backup = freqs.detach().clone()
-        self.freq = nn.Parameter(
-            freqs, requires_grad=True
-        )
-
-    def forward(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        cos = self.freq.cos()
-        sin = self.freq.sin()
-        # print(self.freq.isclose(self.initial_freqs_backup).sum())
-        return cos, sin
 
 class Attention(nn.Module):
     def __init__(
         self,
         cfg : EncoderConfig,
-        
-        # hidden_size,
-        # head_dim,
-        # num_heads,
-        # num_key_value_heads,
-        # use_transposed_rope_for_2d_vertical_orientation: bool = False,
-        # field_width_for_t_rope: int = 40,
-        # field_height_for_t_rope: int = 80,
-        # use_custom_learned_rope: bool = False,
     ):
         super().__init__()
 
@@ -189,9 +160,6 @@ class Attention(nn.Module):
         self.use_transposed_rope_for_2d_vertical_orientation = cfg.use_transposed_rope_for_2d_vertical_orientation
         self.field_width_for_t_rope = cfg.field_width
         self.field_height_for_t_rope = cfg.field_height
-
-        # self.qkv_proj = CastedLinear(self.hidden_size, (self.num_heads + 2 * self.num_key_value_heads) * self.head_dim, bias=False)
-        # self.o_proj = CastedLinear(self.output_size, self.hidden_size, bias=False)
 
         self.qkv_proj = nn.Linear(self.hidden_size, (self.num_heads + 2 * self.num_key_value_heads) * self.head_dim, bias=False)
         self.o_proj = nn.Linear(self.output_size, self.hidden_size, bias=False)
@@ -216,8 +184,8 @@ class Attention(nn.Module):
             cos = cos[indexes_mat_t_flat]
             sin = sin[indexes_mat_t_flat]
 
-        query, key = apply_rotary_pos_emb(query, key, cos, sin)
-
+        query = apply_rotary_pos_emb(query, cos, sin)
+        key = apply_rotary_pos_emb(key, cos, sin)
         q = query.permute(0, 2, 1, 3)  # [B,H,S,D]
         k = key.permute(0, 2, 1, 3)    # [B,H_kv,S,D] (GQA OK)
         v = value.permute(0, 2, 1, 3)  # [B,H_kv,S,D]
@@ -289,41 +257,9 @@ class Attention2DROPEAxial(nn.Module):
         self.width = cfg.field_width
         self.height = cfg.field_height
 
-        # self.qkv_proj = CastedLinear(self.hidden_size, (self.num_heads + 2 * self.num_key_value_heads) * self.head_dim, bias=False)
-        # self.o_proj = CastedLinear(self.output_size, self.hidden_size, bias=False)
-
         self.qkv_proj = nn.Linear(self.hidden_size, (self.num_heads + 2 * self.num_key_value_heads) * self.head_dim, bias=False)
         self.o_proj = nn.Linear(self.output_size, self.hidden_size, bias=False)
         
-        
-        self.q_cnn = nn.Sequential(
-            nn.Conv2d(self.head_dim, self.head_dim, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(self.head_dim, self.head_dim, kernel_size=5, padding=2),
-            nn.ReLU(),
-            nn.Conv2d(self.head_dim, self.head_dim, kernel_size=7, padding=3),
-            nn.ReLU(),
-        )
-        
-        
-        self.k_cnn = nn.Sequential(
-            nn.Conv2d(self.head_dim, self.head_dim, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(self.head_dim, self.head_dim, kernel_size=5, padding=2),
-            nn.ReLU(),
-            nn.Conv2d(self.head_dim, self.head_dim, kernel_size=7, padding=3),
-            nn.ReLU(),
-        )
-
-        self.v_cnn = nn.Sequential(
-            nn.Conv2d(self.head_dim, self.head_dim, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(self.head_dim, self.head_dim, kernel_size=5, padding=2),
-            nn.ReLU(),
-            nn.Conv2d(self.head_dim, self.head_dim, kernel_size=7, padding=3),
-            nn.ReLU(),
-        )
-
     def apply_rope(
         self,
         query: torch.Tensor,  # [B, S, H, D]
@@ -337,24 +273,9 @@ class Attention2DROPEAxial(nn.Module):
         - second half by y-positions.
         Falls back to 1-D RoPE if grid info is invalid.
         """
-        B, S, H, D = query.shape
+        B, L, H, D = query.shape
 
-        # def _to_base(cs: torch.Tensor) -> torch.Tensor:
-        #     # Normalize cos/sin to base shape [S, D]
-        #     if cs.dim() == 2:
-        #         base = cs
-        #     elif cs.dim() == 3:
-        #         # [1, S, D] or [S, 1, D] -> try squeeze leading 1
-        #         base = cs.squeeze(0) if cs.size(0) == 1 else cs.squeeze(1)
-        #     elif cs.dim() == 4:
-        #         # common HF style: [1, S, 1, D]
-        #         base = cs[0, :, 0, :]
-        #     else:
-        #         raise ValueError(f"Unexpected cos/sin shape {tuple(cs.shape)}; need broadcastable to [1,S,1,D] or [S,D].")
-        #     if base.size(0) < S:
-        #         raise ValueError(f"cos/sin first dim ({base.size(0)}) < sequence length S ({S}).")
-        #     return base  # [S, D]
-
+        cos, sin = cos[:L, :], sin[:L, :]
         if self.cfg.use_axial_rope:
             field_h, field_w = self.cfg.field_height, self.cfg.field_width
             assert field_h > 0, field_w > 0
@@ -363,34 +284,25 @@ class Attention2DROPEAxial(nn.Module):
             dtype = query.dtype
 
             # Indices mapping flattened pos -> (x, y)
-            idx = torch.arange(S, device=dev)
-            x_idx = idx % field_w               # [S]
-            y_idx = idx // field_w              # [S]
+            idx = torch.arange(L, device=dev)
+            x_idx = idx % field_w               # [L]
+            y_idx = idx // field_w              # [L]
 
-            # # Prepare base cos/sin for slicing
-            # cos_base = _to_base(cos)            # [S, D] (D >= half)
-            # sin_base = _to_base(sin)            # [S, D]
-            sin_base = sin
-            cos_base = cos
-            # Gather per-axis tables and take the needed half-dim
-            # cos_x/sin_x correspond to x positions; cos_y/sin_y to y positions
-            # cos_x = cos_base.index_select(0, x_idx)[:, :half].view(1, S, 1, half).to(dtype)
-            # sin_x = sin_base.index_select(0, x_idx)[:, :half].view(1, S, 1, half).to(dtype)
-            # cos_y = cos_base.index_select(0, y_idx)[:, :half].view(1, S, 1, half).to(dtype)
-            # sin_y = sin_base.index_select(0, y_idx)[:, :half].view(1, S, 1, half).to(dtype)
-
-            cos_x = cos_base[x_idx, :half].to(dtype)
-            sin_x = sin_base[x_idx, :half].to(dtype)
-            cos_y = cos_base[y_idx, :half].to(dtype)
-            sin_y = sin_base[y_idx, :half].to(dtype)
+            cos_x = cos[x_idx, :half].to(dtype) # [L, D/2]
+            sin_x = sin[x_idx, :half].to(dtype) # [L, D/2]
+            cos_y = cos[y_idx, :half].to(dtype) # [L, D/2]
+            sin_y = sin[y_idx, :half].to(dtype) # [L, D/2]
 
 
             # Split Q/K along the head dimension and apply RoPE per axis
-            qx, qy = query[..., :half], query[..., half:]
-            kx, ky = key  [..., :half], key  [..., half:]
+            qx, qy = query[..., :half], query[..., half:] # [B,L,H,D/2]
+            kx, ky = key  [..., :half], key  [..., half:] # [B,L,H,D/2]
 
-            qx, kx = apply_rotary_pos_emb(qx, kx, cos_x, sin_x)  # rotate by x
-            qy, ky = apply_rotary_pos_emb(qy, ky, cos_y, sin_y)  # rotate by y
+            qx = apply_rotary_pos_emb(qx, cos_x, sin_x) # [B,L,H,D/2]
+            qy = apply_rotary_pos_emb(qy, cos_y, sin_y) # [B,L,H,D/2]
+
+            kx = apply_rotary_pos_emb(kx, cos_x, sin_x) # [B,L,H,D/2]
+            ky = apply_rotary_pos_emb(ky, cos_y, sin_y) # [B,L,H,D/2]
 
             query = torch.cat([qx, qy], dim=-1)
             key   = torch.cat([kx, ky], dim=-1)
@@ -398,37 +310,27 @@ class Attention2DROPEAxial(nn.Module):
             # Note: V is intentionally NOT rotated (standard RoPE usage). :contentReference[oaicite:1]{index=1}
         else:
             # 1-D fallback
-            query, key = apply_rotary_pos_emb(query, key, cos, sin)
+            query = apply_rotary_pos_emb(query, cos, sin)
+            key = apply_rotary_pos_emb(key, cos, sin)
 
         return query, key
 
         
 
     def forward(self, cos_sin: CosSin, hidden_states: torch.Tensor) -> torch.Tensor:
-        batch_size, seq_len, _ = hidden_states.shape
+        B, L, D = hidden_states.shape # [B, L, D]
         log_debug(f'{hidden_states.shape = }')
 
         # hidden_states: [bs, seq_len, num_heads, head_dim]
-        qkv : torch.Tensor = self.qkv_proj(hidden_states)
+        qkv : torch.Tensor = self.qkv_proj(hidden_states) # [B, L, H * HD]
         log_debug(f'{qkv.shape = }')
 
         # Split head
-        qkv = qkv.view(batch_size, seq_len, self.num_heads + 2 * self.num_key_value_heads, self.head_dim)
+        qkv = qkv.view(B, L, self.num_heads + 2 * self.num_key_value_heads, self.head_dim) # [B, L, (num_heads + 2 * num_key_value_heads), head_dim]
         query = qkv[:, :, :self.num_heads]
         key = qkv[:, :, self.num_heads: self.num_heads + self.num_key_value_heads]
         value = qkv[:, :, self.num_heads + self.num_key_value_heads:]
         log_debug(f'{qkv.shape = }, {query.shape = }, {key.shape = }, {value.shape = }')
-        
-        # if self.cfg.use_cnn :
-        #     query_ = self.q_cnn(query)
-        #     key_ = self.k_cnn(key)
-        #     value_ = self.v_cnn(value)
-        #     assert query_.shape == query.shape
-        #     assert key_.shape == key.shape
-        #     assert value_.shape == value.shape
-        #     query = query_
-        #     key = key_
-        #     value = value_
 
         query, key = self.apply_rope(query, key, cos_sin[0], cos_sin[1])
 
@@ -445,7 +347,7 @@ class Attention2DROPEAxial(nn.Module):
         attn = sdpa(q, k, v, attn_mask=None, is_causal=False)
         log_debug(f'{attn.shape = }')
         attn_output = attn.permute(0, 2, 1, 3)  # [B,S,H,D]
-        attn_output = attn_output.view(batch_size, seq_len, self.output_size)  # type: ignore
+        attn_output = attn_output.view(B, L, self.output_size)  # type: ignore
         log_debug(f'{attn_output.shape = }')
         
         return self.o_proj(attn_output)
@@ -453,6 +355,193 @@ class Attention2DROPEAxial(nn.Module):
 
     
 
+
+# class AttentionMixedRope2d(nn.Module) :
+#     def __init__(
+#         self,
+#         cfg : EncoderConfig,
+#     ):
+#         super().__init__()
+#         self.cfg = cfg
+
+#         self.hidden_size = cfg.d_model
+#         self.head_dim = cfg.d_head
+#         self.output_size = self.head_dim * cfg.n_head
+#         self.num_heads = cfg.n_head
+#         self.num_key_value_heads = cfg.n_head
+
+#         self.use_transposed_rope_for_2d_vertical_orientation = cfg.use_transposed_rope_for_2d_vertical_orientation
+#         self.width = cfg.field_width
+#         self.height = cfg.field_height
+
+#         self.qkv_proj = nn.Linear(self.hidden_size, (self.num_heads + 2 * self.num_key_value_heads) * self.head_dim, bias=False)
+#         self.o_proj = nn.Linear(self.output_size, self.hidden_size, bias=False)
+
+#         # 2D RoPE params
+#         D = cfg.d_head
+#         d_half = cfg.d_head // 2                           # complex pairs per head
+#         # one set per head (and per layer if you follow the paper)
+#         self.theta_x = nn.Parameter(torch.empty(cfg.n_head, d_half))  # learnable
+#         self.theta_y = nn.Parameter(torch.empty(cfg.n_head, d_half))  # learnable
+
+#         # Good init: log-spaced like 2-D RoPE, then start “mostly axial”
+#         t = torch.arange(d_half, dtype=torch.float32)
+#         base = 100.0 ** (- t / (D/4))             # Eq. (13) schedule
+#         with torch.no_grad():
+#             self.theta_x.copy_(base.expand(cfg.n_head, -1))  # start as x-only
+#             self.theta_y.zero_()                    # y learns from 0
+
+
+#     def apply_rope(
+#         self,
+#         query: torch.Tensor,  # [B, S, H, D]
+#         key: torch.Tensor,    # [B, S, H, D]
+#         cos: torch.Tensor,    # expected broadcastable to [1, S, 1, D] or shaped [S, D]
+#         sin: torch.Tensor,    # same as cos
+#     ) -> Tuple[torch.Tensor, torch.Tensor]:
+#         """
+#         Axial RoPE on a flattened (field_h x field_w) grid:
+#         - first half of dim D is rotated by x-positions,
+#         - second half by y-positions.
+#         Falls back to 1-D RoPE if grid info is invalid.
+#         """
+#         B, S, H, D = query.shape
+
+#         # def _to_base(cs: torch.Tensor) -> torch.Tensor:
+#         #     # Normalize cos/sin to base shape [S, D]
+#         #     if cs.dim() == 2:
+#         #         base = cs
+#         #     elif cs.dim() == 3:
+#         #         # [1, S, D] or [S, 1, D] -> try squeeze leading 1
+#         #         base = cs.squeeze(0) if cs.size(0) == 1 else cs.squeeze(1)
+#         #     elif cs.dim() == 4:
+#         #         # common HF style: [1, S, 1, D]
+#         #         base = cs[0, :, 0, :]
+#         #     else:
+#         #         raise ValueError(f"Unexpected cos/sin shape {tuple(cs.shape)}; need broadcastable to [1,S,1,D] or [S,D].")
+#         #     if base.size(0) < S:
+#         #         raise ValueError(f"cos/sin first dim ({base.size(0)}) < sequence length S ({S}).")
+#         #     return base  # [S, D]
+#         cos, sin = cos[:S, :], sin[:S, :]
+#         if self.cfg.use_axial_rope:
+#             field_h, field_w = self.cfg.field_height, self.cfg.field_width
+#             assert field_h > 0, field_w > 0
+#             half = D // 2
+#             dev = query.device
+#             dtype = query.dtype
+
+#             # Indices mapping flattened pos -> (x, y)
+#             idx = torch.arange(S, device=dev)
+#             x_idx = idx % field_w               # [S]
+#             y_idx = idx // field_w              # [S]
+
+#             # # Prepare base cos/sin for slicing
+#             # cos_base = _to_base(cos)            # [S, D] (D >= half)
+#             # sin_base = _to_base(sin)            # [S, D]
+#             sin_base = sin
+#             cos_base = cos
+#             # Gather per-axis tables and take the needed half-dim
+#             # cos_x/sin_x correspond to x positions; cos_y/sin_y to y positions
+#             # cos_x = cos_base.index_select(0, x_idx)[:, :half].view(1, S, 1, half).to(dtype)
+#             # sin_x = sin_base.index_select(0, x_idx)[:, :half].view(1, S, 1, half).to(dtype)
+#             # cos_y = cos_base.index_select(0, y_idx)[:, :half].view(1, S, 1, half).to(dtype)
+#             # sin_y = sin_base.index_select(0, y_idx)[:, :half].view(1, S, 1, half).to(dtype)
+
+#             cos_x = cos_base[x_idx, :half].to(dtype)
+#             sin_x = sin_base[x_idx, :half].to(dtype)
+#             cos_y = cos_base[y_idx, :half].to(dtype)
+#             sin_y = sin_base[y_idx, :half].to(dtype)
+
+
+#             # Split Q/K along the head dimension and apply RoPE per axis
+#             qx, qy = query[..., :half], query[..., half:]
+#             kx, ky = key  [..., :half], key  [..., half:]
+
+#             # qx, kx = apply_rotary_pos_emb(qx, kx, cos_x, sin_x)  # rotate by x
+#             # qy, ky = apply_rotary_pos_emb(qy, ky, cos_y, sin_y)  # rotate by y
+#             qx = apply_rotary_pos_emb(qx, cos_x, sin_x)
+#             qy = apply_rotary_pos_emb(qy, cos_y, sin_y)
+
+#             kx = apply_rotary_pos_emb(kx, cos_x, sin_x)
+#             ky = apply_rotary_pos_emb(ky, cos_y, sin_y)
+            
+
+#             query = torch.cat([qx, qy], dim=-1)
+#             key   = torch.cat([kx, ky], dim=-1)
+
+#             # Note: V is intentionally NOT rotated (standard RoPE usage). :contentReference[oaicite:1]{index=1}
+#         else:
+#             # 1-D fallback
+#             # query, key = apply_rotary_pos_emb(query, key, cos, sin)
+#             query = apply_rotary_pos_emb(query, cos, sin)
+#             key = apply_rotary_pos_emb(key, cos, sin)
+
+#         return query, key
+
+        
+
+#     def forward(self, cos_sin: CosSin, hidden_states: torch.Tensor) -> torch.Tensor:
+#         batch_size, seq_len, _ = hidden_states.shape
+#         log_debug(f'{hidden_states.shape = }')
+
+#         # hidden_states: [bs, seq_len, num_heads, head_dim]
+#         qkv : torch.Tensor = self.qkv_proj(hidden_states)
+#         log_debug(f'{qkv.shape = }')
+
+#         # Split head
+#         qkv = qkv.view(batch_size, seq_len, self.num_heads + 2 * self.num_key_value_heads, self.head_dim)
+#         query = qkv[:, :, :self.num_heads]
+#         key = qkv[:, :, self.num_heads: self.num_heads + self.num_key_value_heads]
+#         value = qkv[:, :, self.num_heads + self.num_key_value_heads:]
+#         log_debug(f'{qkv.shape = }, {query.shape = }, {key.shape = }, {value.shape = }')
+
+
+#         field_w = self.cfg.field_width
+
+#         idx   = torch.arange(S, device=query.device)
+#         x_idx = idx % field_w                      # [S]
+#         y_idx = idx // field_w                     # [S]
+
+#         # [S, 1, H, d_half]
+#         phase = (x_idx[:,None,None,None] * self.theta_x[None,None,:,:] +
+#                 y_idx[:,None,None,None] * self.theta_y[None,None,:,:])
+
+#         cos_t = torch.cos(phase)
+#         sin_t = torch.sin(phase)
+
+#         # expand each complex pair t to its (2t, 2t+1) channels
+#         # -> [S, 1, H, D]
+#         cos = cos_t.repeat_interleave(2, dim=-1)
+#         sin = sin_t.repeat_interleave(2, dim=-1)
+
+#         # make broadcastable for your apply_rotary_pos_emb (typical shape [1,S,H,D])
+#         cos = cos.permute(1,0,2,3)  # [1,S,H,D]
+#         sin = sin.permute(1,0,2,3)  # [1,S,H,D]
+
+
+
+#         query, key = self.apply_rope(query, key, cos_sin[0], cos_sin[1])
+
+#         log_debug(f'{query.shape = }, {key.shape = }, {value.shape = }')
+
+#         # Final permutation to [B, H, S, D]
+#         q = query.permute(0, 2, 1, 3)
+#         k = key.permute(0, 2, 1, 3)
+#         v = value.permute(0, 2, 1, 3)
+
+
+#         log_debug(f'{q.shape = }, {k.shape = }, {v.shape = }')
+
+#         attn = sdpa(q, k, v, attn_mask=None, is_causal=False)
+#         log_debug(f'{attn.shape = }')
+#         attn_output = attn.permute(0, 2, 1, 3)  # [B,S,H,D]
+#         attn_output = attn_output.view(batch_size, seq_len, self.output_size)  # type: ignore
+#         log_debug(f'{attn_output.shape = }')
+        
+#         return self.o_proj(attn_output)
+
+
+    
 
 
 class TransformerBlockHRM(nn.Module):
@@ -467,15 +556,6 @@ class TransformerBlockHRM(nn.Module):
             max_position_embeddings = self.cfg.max_len,
             base = self.cfg.rope_theta
         )
-        # self.rotary_emb = LearnedROPE(
-        #     dim=self.cfg.d_head,
-        #     max_position_embeddings=self.cfg.max_len,
-        #     base=self.cfg.rope_theta
-        # )
-        # self.rope_cos, self.rope_sin = self.rotary_emb()
-        # self.register_buffer('rope_cos', self.rope_cos, persistent=False)
-        # self.register_buffer('rope_sin', self.rope_sin, persistent=False)
-
         self.self_attn = Attention2DROPEAxial(
             cfg=cfg
         )
@@ -486,12 +566,7 @@ class TransformerBlockHRM(nn.Module):
         self.norm_eps = cfg.layer_norm_eps
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor: # type: ignore
-        # Post Norm
-        # Self Attention
         log_debug(f'{hidden_states.shape = }')
-        # cos_sin : torch.Tensor = self.rope_cos_sin # type: ignore
-        # rope_cos : torch.Tensor = self.rope_cos # type: ignore
-        # rope_sin : torch.Tensor = self.rope_sin # type: ignore
         cos_sin : CosSin = self.rotary_emb()
         cos_sin : CosSin = (cos_sin[0].to(hidden_states.device), cos_sin[1].to(hidden_states.device))
         hidden_states = rms_norm(hidden_states + self.self_attn(cos_sin=cos_sin, hidden_states=hidden_states), variance_epsilon=self.norm_eps)

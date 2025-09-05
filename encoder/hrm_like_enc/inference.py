@@ -117,6 +117,7 @@ def augmented_inference_batched_with_voting(
     labels: torch.Tensor,
     ignore_label_id: int,
     pad_token_id : int,
+    vocab_size: int,
     debug: bool = False
 ):
     device = input_ids.device
@@ -176,7 +177,7 @@ def augmented_inference_batched_with_voting(
         colors_perms=colors_perms,
         labels_orig=labels,
         preds_permutated=preds_p_split,
-        vocab_size=model.cfg.vocab_size,
+        vocab_size=vocab_size,
         debug = debug
     )
     nb_l = (labels != ignore_label_id).sum().item()

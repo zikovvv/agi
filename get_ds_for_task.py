@@ -87,7 +87,8 @@ def get_custom_ds_arc(
     task: Literal[
         'fill_between_pieces',
         'fill_between_pieces_with_color_from_example',
-        'fill_squares_2d'
+        'fill_squares_2d',
+        'sudoku'
     ],
     **kwargs,
 ) -> List[Tuple[np.ndarray, np.ndarray]] :
@@ -276,9 +277,31 @@ def get_custom_ds_arc(
                         break
                 res.append((in_field.flatten(), out_field.flatten()))
             return res
+        case 'sudoku' :
+            from sudoku.engine import _complete_solution
+            inuts = [_complete_solution() - 1 for _ in range(nb_samples)] # 0-8 instead of 1-9
+            nb_missing_min, nb_missing_max = kwargs.get('nb_missing_min', None), kwargs.get('nb_missing_max', None)
+            masked_token_id = kwargs.get('masked_token_id', None)
+            assert masked_token_id is not None, "masked_token_id must be specified for sudoku task"
+            assert nb_missing_min is not None, "n_missing must be specified for sudoku task"
+            assert nb_missing_max is not None, "n_missing_max must be specified for sudoku task"
+            assert nb_missing_min <= nb_missing_max, f'{nb_missing_min = }, {nb_missing_max = }]' 
+            masked = []
+            for p in inuts :
+                p_copy = p.copy()
+                # remove some numbers
+                n_remove = random.randint(nb_missing_min, nb_missing_max)
+                mask = np.random.choice(81, n_remove, replace=False)
+                mask_2d = np.unravel_index(mask, (9, 9))
+                p_copy[mask_2d] = masked_token_id
+                masked.append(p_copy)
+            #
+            # print(inuts[0], masked[0])
+            # print(inuts[1], masked[1])
             
-            
-            
+            # exit()
+            return [(m.flatten(), s.flatten()) for m, s in zip(masked, inuts)]
+
     raise ValueError("Unknown task")
 
 def get_arc_puzzle_ds_as_flat_ds(

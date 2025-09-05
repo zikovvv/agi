@@ -471,6 +471,7 @@ def get_dataloaders_for_flat_seq_cls(
     batch_size_eval : int,
     add_sep : bool,
     add_labels_to_inputs : bool,
+    expand : bool,
     device : str
 ) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
     def get_as_input_and_labels_pairs() -> List[Tuple[torch.Tensor, torch.Tensor]]:
@@ -480,27 +481,30 @@ def get_dataloaders_for_flat_seq_cls(
             input_tensor = torch.tensor(input_seq, dtype=torch.long)
             output_tensor = torch.tensor(output_seq, dtype=torch.long)
             
-            # Create sequence: input + sep + masked_tokens
-            sep_shift = int(add_sep)
-            total_len = input_tensor.shape[0] + sep_shift + output_tensor.shape[0]
-            input_ids = torch.full((total_len,), pad_token_id, dtype=torch.long)
-            labels = torch.full((total_len,), ignore_label_id, dtype=torch.long)
-            
-            # Fill input part
-            input_ids[:input_tensor.shape[0]] = input_tensor
-            # Add separator
-            if add_sep:
-                input_ids[input_tensor.shape[0]] = sep_token_id
-            # Fill masked tokens for output part
-            if add_labels_to_inputs:
-                input_ids[input_tensor.shape[0] + sep_shift:] = output_tensor
-            else:
-                input_ids[input_tensor.shape[0] + sep_shift:] = pad_token_id
-            
-            # Set labels for output part only
-            labels[input_tensor.shape[0] + sep_shift:] = output_tensor
-            
-            res.append((input_ids, labels))
+            if expand: 
+                # Create sequence: input + sep + masked_tokens
+                sep_shift = int(add_sep)
+                total_len = input_tensor.shape[0] + sep_shift + output_tensor.shape[0]
+                input_ids = torch.full((total_len,), pad_token_id, dtype=torch.long)
+                labels = torch.full((total_len,), ignore_label_id, dtype=torch.long)
+                
+                # Fill input part
+                input_ids[:input_tensor.shape[0]] = input_tensor
+                # Add separator
+                if add_sep:
+                    input_ids[input_tensor.shape[0]] = sep_token_id
+                # Fill masked tokens for output part
+                if add_labels_to_inputs:
+                    input_ids[input_tensor.shape[0] + sep_shift:] = output_tensor
+                else:
+                    input_ids[input_tensor.shape[0] + sep_shift:] = pad_token_id
+                
+                # Set labels for output part only
+                labels[input_tensor.shape[0] + sep_shift:] = output_tensor
+                
+                res.append((input_ids, labels))
+            else : 
+                res.append((input_tensor, output_tensor))
         return res
 
     def collate_fn(
@@ -576,7 +580,8 @@ def ex3():
         batch_size_eval,
         add_sep=True,
         device=device,
-        add_labels_to_inputs=False
+        add_labels_to_inputs=False,
+        expand=True
     )
 
     for batch in train_dl:

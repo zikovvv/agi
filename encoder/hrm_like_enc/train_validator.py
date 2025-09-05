@@ -339,6 +339,8 @@ def main(
         use_transposed_rope_for_2d_vertical_orientation=False,
         field_width=field_width,
         field_height=field_width * 2,
+        
+        use_axial_rope=True
     ) if mcfg is None else mcfg
 
     # device = tcfg.device
