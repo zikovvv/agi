@@ -45,10 +45,23 @@ def train_one_epoch(
     total_loss_last = 0.0
     nb_last_correct = 0
     nb_last_classified = 0
-    
-    
-    for batch in tqdm.tqdm(loader, total=len(loader)):
+
+
+    for bid, batch in enumerate(tqdm.tqdm(loader, total=len(loader))):
         input_ids, labels = batch['input_ids'], batch['labels']
+        
+        if bid < tcfg.t_show_nb_first_preds:
+            log(f'{input_ids.shape = }, {labels.shape = }')
+            plot_batch(
+                data=[
+                    input_ids[:10, :],
+                    labels[:10, :],
+                ],
+                height=dcfg.max_width * (2 if dcfg.expand else 1),
+                width=dcfg.max_width,
+                show_to_window=tcfg.t_show_in_window,
+            )
+        
         colors_orig, colors_perms, input_ids, labels = augment_colors_batch(
             input_ids,
             labels,
@@ -306,23 +319,24 @@ def main():
         test_frac=0.0,
         num_samples=300,
         seq_len=seq_len,
-        max_width=field_width
+        max_width=field_width,
+        expand=expand,
     )
 
     tcfg = TrainConfig(
         lr=1e-4,
 
         # train cfg
-        t_batch_size=8,
-        t_show_nb_first_preds=1,
-        t_nb_max_self_correction=3,
-        t_show_in_window=True,
-        t_max_nb_aug=20,
+        t_batch_size=2,
+        t_show_nb_first_preds=0,
+        t_nb_max_self_correction=1,
+        t_show_in_window=False,
+        t_max_nb_aug=4,
 
         # val cfg
-        v_batch_size=16,
+        v_batch_size=3,
         v_nb_max_self_correction=1,
-        v_do_augmented_inference=True,
+        v_do_augmented_inference=False,
         v_show_in_window=False,
         v_max_nb_aug=20,
         v_show_nb_first_preds=1
@@ -336,7 +350,7 @@ def main():
         dim_feedforward=128,
         vocab_size=200,
         
-        max_len=4000,
+        nb_max_rope_positions=4000,
         
         nb_refinement_steps=1,
         nb_last_trained_steps=1,
@@ -346,13 +360,29 @@ def main():
         enable_pseudo_diffusion_outer=True,
         feed_first_half=False,
 
-        use_transposed_rope_for_2d_vertical_orientation=True,
-        field_width=field_width,
-        field_height=field_width * 2,
+        # use_transposed_rope_for_2d_vertical_orientation=False,
+        # field_width=field_width,
+        # field_height=field_width * 2,
 
         use_emb_norm = False,
+        
+        use_axial_rope = False,
+        
+        # learned pos emb
+        use_learned_pos_emb=True,
+        use_custom_learned_pos_emb_per_head=False,
+        
+        # learned pos emb with custo dim
+        use_projection_for_learned_pos_embs=False,        
+        learned_pos_embs_dim=64,
+        
+        # if use ready made implementation from x_transformers
+        use_x_encoder=False,
 
-        # use_axial_rope = True,
+        # neccessary for 2d learned pos embedding
+        field_width=field_width,
+        field_height=field_width * (2 if expand else 1),
+
     )
 
     # Initialize wandb run

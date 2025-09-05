@@ -30,11 +30,12 @@ class EncoderConfig:
     # rope_2d_attn_row_width: int = 40
     use_transposed_rope_for_2d_vertical_orientation: bool = False
     use_axial_rope: bool = False
-    field_width: int = 40
-    field_height: int = 80
+
+    field_width: int = -1
+    field_height: int = -1
 
     # Grid limits
-    max_len: int = 5000
+    nb_max_rope_positions: int = 5000
 
     # Vocabulary
     vocab_size: int = 200
@@ -47,8 +48,16 @@ class EncoderConfig:
     # how to mark something as ignored
     ignore_id: int = -100
 
-    embeddings_type : Literal['learnable', 'rope'] = 'learnable'  # 'learnable' or 'rope'
+    use_x_encoder: bool = False
+    
+    init_hidden_state_to_zero: bool = True
+    init_hidden_state_std: float = 0.02
 
+    # learned pos embdeddings
+    use_learned_pos_emb: bool = False
+    learned_pos_embs_dim: int = 32  # if used, must be <= d_head
+    use_projection_for_learned_pos_embs: bool = False  # whether to project the learned pos emb to d_head dim
+    use_custom_learned_pos_emb_per_head: bool = False  # whether to have a separate learned pos emb for each head (increases param count a lot)
 
 @dataclass
 class DatasetConfig:
@@ -68,7 +77,6 @@ class TrainConfig:
     nb_max_epochs: int = 50
     lr: float = 3e-4
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
-
 
     t_batch_size: int = 32
     t_show_nb_first_preds: int = 2

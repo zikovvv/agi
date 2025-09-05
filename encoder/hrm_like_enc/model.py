@@ -9,32 +9,107 @@ import torch.nn.functional as F
 from encoder.hrm_like_enc.components import TransformerBlockHRM
 from encoder.hrm_like_enc.config import EncoderConfig
 from common import *
+from x_transformers import Encoder as XEncoder
 
 
 class EncoderModel(nn.Module):
     def __init__(self, cfg: EncoderConfig):
         super().__init__()
-        self.cfg = cfg
+        self.cfg : EncoderConfig = cfg
 
         d = cfg.d_model
 
         # Embeddings
         self.token_embed = nn.Embedding(cfg.vocab_size, d)
-        self.pos_emb = nn.Embedding(cfg.max_len, d)
+        self.pos_emb = nn.Embedding(cfg.nb_max_rope_positions, d)
         nn.init.normal_(self.token_embed.weight, mean=0.0, std=0.02)
         nn.init.normal_(self.pos_emb.weight, mean=0.0, std=0.02)
 
         self.embed_ln = nn.LayerNorm(d, eps=cfg.layer_norm_eps)
         self.embed_drop = nn.Dropout(cfg.dropout)
-        self.seq_len = cfg.max_len
+        self.seq_len = cfg.nb_max_rope_positions
 
-        # self.encoder = nn.Sequential(
-        #     *[TransformerBlockHRM(self.cfg) for _ in range(self.cfg.num_layers)]
-        # )
         
-        self.blocks = nn.ModuleList(
-            [TransformerBlockHRM(self.cfg) for _ in range(self.cfg.num_layers)]
-        )
+        if self.cfg.use_x_encoder :
+            self.blocks = nn.ModuleList(
+                [
+                    XEncoder(
+                        dim = self.cfg.d_model,
+                        depth = self.cfg.num_layers,
+                        heads = self.cfg.n_head,
+                        causal = False,
+                        cross_attend = False,
+                        only_cross = False,
+                        use_scalenorm = False,
+                        use_rmsnorm = True,# default is False
+                        use_dynamic_tanh = False,
+                        dynamic_tanh_init_alpha = 1.,
+                        use_simple_rmsnorm = False,
+                        use_adaptive_layernorm = False,
+                        use_adaptive_rmsnorm = False,
+                        use_adaptive_layerscale = False, # paired with use_adaptive_layernorm for ada-ln-zero from DiT paper
+                        norm_add_unit_offset = True,
+                        dim_condition = None,
+                        adaptive_condition_mlp = False,
+                        adaptive_condition_mlp_expansion = 4,
+                        alibi_pos_bias = False,
+                        alibi_num_heads = None,
+                        rel_pos_bias = False,
+                        rel_pos_num_buckets = 32,
+                        rel_pos_max_distance = 128,
+                        dynamic_pos_bias = False,
+                        dynamic_pos_bias_log_distance = False,
+                        dynamic_pos_bias_mlp_depth = 2,
+                        dynamic_pos_bias_norm = False,
+                        rotary_pos_emb = False,
+                        rotary_emb_dim = None,
+                        rotary_xpos = False,
+                        rotary_interpolation_factor = 1.,
+                        rotary_xpos_scale_base = 512,
+                        rotary_base_rescale_factor = 1.,
+                        rotate_num_heads = None,
+                        weight_tie_layers = False,
+                        # custom_layers: tuple[str, ...] | None = None,
+                        # layers_execute_order: tuple[int, ...] | None = None,
+                        # sandwich_coef = None,
+                        # par_ratio = None,
+                        # residual_attn = False,
+                        # cross_residual_attn = False,
+                        # macaron = False,
+                        pre_norm = True,
+                        pre_norm_has_final_norm = True,
+                        # gate_residual = False,
+                        # scale_residual = False,
+                        # scale_residual_constant = 1.,
+                        # shift_tokens = 0,
+                        # sandwich_norm = False,
+                        # softclamp_output = False,
+                        # softclamp_output_value = 30.,
+                        # zero_init_branch_output = False,
+                        # layer_dropout = 0.,
+                        # cross_attn_tokens_dropout = 0.,
+                        # disable_abs_pos_emb = None,
+                        # use_layerscale = False,
+                        # layerscale_init_value = 0.,
+                        # unet_skips = False,
+                        # integrate_layers = False,
+                        # layer_integrate_use_softmax = True,
+                        num_residual_streams = 1,
+                        # qkv_receive_diff_residuals = False,
+                        reinject_input = False,              # seen first in DEQ paper https://arxiv.org/abs/1909.01377, but later used in a number of papers trying to achieve depthwise generalization https://arxiv.org/abs/2410.03020v1
+                        learned_reinject_input_gate = False,
+                        add_value_residual = True,          # resformer from Zhou et al - https://arxiv.org/abs/2410.17897v1 - further corroboration by https://arxiv.org/abs/2412.15113 (faster emergence of ICL) - looks like this setting may becoming a necessity for every transformer soon
+                        learned_value_residual_mix = True,   # seeing big improvements when the value residual mix value is learned per token - credit goes to @faresobeid for taking the first step with learned scalar mix, then @Blinkdl for taking it a step further with data dependent. here we will use per token learned
+                        rel_pos_kwargs = dict(),
+                    ) for _ in range(self.cfg.num_layers)
+                ]
+            )
+        else :
+            self.blocks = nn.ModuleList(
+                [TransformerBlockHRM(self.cfg) for _ in range(self.cfg.num_layers)]
+            )
+        
+        
 
     def encoder(self, h : torch.Tensor) -> torch.Tensor:
         first_half_copy = h[:, :self.seq_len // 2].clone()
@@ -78,7 +153,10 @@ class EncoderModel(nn.Module):
             assert self.cfg.nb_last_trained_steps > 0
             assert self.cfg.nb_last_trained_steps <= self.cfg.nb_refinement_steps
             nb_steps_no_grad = self.cfg.nb_refinement_steps - self.cfg.nb_last_trained_steps
-            h = torch.zeros_like(inps)
+            if self.cfg.init_hidden_state_to_zero :
+                h = torch.zeros_like(inps)
+            else :
+                h = torch.randn_like(inps) * self.cfg.init_hidden_state_std
             with torch.no_grad():
                 for i in range(nb_steps_no_grad):
                     h = self.encoder(h + inps)

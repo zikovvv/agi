@@ -329,7 +329,7 @@ def main(
         nb_last_trained_steps=1,
         dim_feedforward=256,
         vocab_size=200,
-        max_len=4000,
+        nb_max_rope_positions=4000,
         
         use_cnn=False,
         enable_pseudo_diffusion_inner=False,

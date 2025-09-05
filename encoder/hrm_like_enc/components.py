@@ -6,6 +6,8 @@ import torch.nn.functional as F
 from torch.nn.functional import scaled_dot_product_attention as sdpa
 from common import *
 from encoder.hrm_like_enc.config import EncoderConfig
+from x_transformers import Encoder as XEncoder
+
 
 def trunc_normal_init_(tensor: torch.Tensor, std: float = 1.0, lower: float = -2.0, upper: float = 2.0):
     # NOTE: PyTorch nn.init.trunc_normal_ is not mathematically correct, the std dev is not actually the std dev of initialized tensor
@@ -259,12 +261,135 @@ class Attention2DROPEAxial(nn.Module):
 
         self.qkv_proj = nn.Linear(self.hidden_size, (self.num_heads + 2 * self.num_key_value_heads) * self.head_dim, bias=False)
         self.o_proj = nn.Linear(self.output_size, self.hidden_size, bias=False)
+
+        assert cfg.learned_pos_embs_dim == cfg.d_head or cfg.use_projection_for_learned_pos_embs, "learned_pos_embs_dim must be equal to d_head if not using projection"
+
+        per_head_coeff = cfg.n_head if cfg.use_custom_learned_pos_emb_per_head else 1
+        self.l_pos_emb_global_flat = nn.ModuleList([nn.Embedding(cfg.nb_max_rope_positions, cfg.learned_pos_embs_dim) for _ in range(per_head_coeff)])
+        self.l_pos_emb_local_row = nn.ModuleList([nn.Embedding(cfg.nb_max_rope_positions, cfg.learned_pos_embs_dim) for _ in range(per_head_coeff)])
+        self.l_pos_emb_local_col = nn.ModuleList([nn.Embedding(cfg.nb_max_rope_positions, cfg.learned_pos_embs_dim) for _ in range(per_head_coeff)])
+
         
-    def apply_rope(
+        different_embs_coeff = 3
+        self.pos_embeddings_projection = nn.Linear(cfg.learned_pos_embs_dim * different_embs_coeff + self.head_dim, self.head_dim)
+
+    def apply_rope_flat(
         self,
         query: torch.Tensor,  # [B, S, H, D]
         key: torch.Tensor,    # [B, S, H, D]
         cos: torch.Tensor,    # expected broadcastable to [1, S, 1, D] or shaped [S, D]
+        sin: torch.Tensor,    # same as cos
+    ) :
+        # 1-D fallback
+        query = apply_rotary_pos_emb(query, cos, sin)
+        key = apply_rotary_pos_emb(key, cos, sin)
+        return query, key
+
+    def apply_rope_axial(
+        self,
+        query: torch.Tensor,  # [B, S, H, D]
+        key: torch.Tensor,    # [B, S, H, D]
+        cos: torch.Tensor,    # expected broadcastable to [1, S, 1, D] or shaped [S, D]
+        sin: torch.Tensor,    # same as cos
+    ) :
+        B, L, H, D = query.shape
+        
+        cos, sin = cos[:L, :], sin[:L, :]
+        field_h, field_w = self.cfg.field_height, self.cfg.field_width
+        assert field_h > 0, field_w > 0
+        half = D // 2
+        dev = query.device
+        dtype = query.dtype
+
+        # Indices mapping flattened pos -> (x, y)
+        idx = torch.arange(L, device=dev)
+        x_idx = idx % field_w               # [L]
+        y_idx = idx // field_w              # [L]
+
+        cos_x = cos[x_idx, :half].to(dtype) # [L, D/2]
+        sin_x = sin[x_idx, :half].to(dtype) # [L, D/2]
+        cos_y = cos[y_idx, :half].to(dtype) # [L, D/2]
+        sin_y = sin[y_idx, :half].to(dtype) # [L, D/2]
+
+
+        # Split Q/K along the head dimension and apply RoPE per axis
+        qx, qy = query[..., :half], query[..., half:] # [B,L,H,D/2]
+        kx, ky = key  [..., :half], key  [..., half:] # [B,L,H,D/2]
+
+        qx = apply_rotary_pos_emb(qx, cos_x, sin_x) # [B,L,H,D/2]
+        qy = apply_rotary_pos_emb(qy, cos_y, sin_y) # [B,L,H,D/2]
+
+        kx = apply_rotary_pos_emb(kx, cos_x, sin_x) # [B,L,H,D/2]
+        ky = apply_rotary_pos_emb(ky, cos_y, sin_y) # [B,L,H,D/2]
+
+        query = torch.cat([qx, qy], dim=-1)
+        key   = torch.cat([kx, ky], dim=-1)
+
+        # Note: V is intentionally NOT rotated (standard RoPE usage). :contentReference[oaicite:1]{index=1}
+        return query, key
+    
+    def get_idx(self, H : int, W : int, device: torch.device) :
+        L = H * W
+        idx = torch.arange(L, device=device)
+        idx_rows = idx // W
+        idx_cols = idx % W
+        idx_g_h = idx
+        return idx_g_h, idx_rows, idx_cols
+
+    
+    def get_pos_embs(self, device : torch.device) :
+        L, H, D = self.cfg.field_height * self.cfg.field_width, self.num_heads, self.cfg.learned_pos_embs_dim if self.cfg.use_learned_pos_emb else self.cfg.d_head
+        idx_g_h, idx_rows, idx_cols = self.get_idx(self.cfg.field_height, self.cfg.field_width, device) # [L]
+        assert idx_g_h.shape == idx_rows.shape == idx_cols.shape == (L,)
+        
+        custom_coef = 1 if not self.cfg.use_custom_learned_pos_emb_per_head else self.cfg.n_head
+
+        global_embs = torch.stack([pe(idx_g_h) for pe in self.l_pos_emb_global_flat]).unsqueeze(0) # [1, custom_coef, L, D]
+        row_embs = torch.stack([pe(idx_rows) for pe in self.l_pos_emb_local_row]).unsqueeze(0) # [1, custom_coef, L, D]
+        col_embs = torch.stack([pe(idx_cols) for pe in self.l_pos_emb_local_col]).unsqueeze(0) # [1, custom_coef, L, D]
+        assert global_embs.shape == row_embs.shape == col_embs.shape == (1, custom_coef, L, D), (global_embs.shape, row_embs.shape, col_embs.shape, (1, custom_coef, L, D))
+        
+        if not self.cfg.use_custom_learned_pos_emb_per_head:
+            # repear along head dim
+            global_embs = global_embs.repeat(1, self.num_heads, 1, 1) # [1, H, L, D]
+            row_embs = row_embs.repeat(1, self.num_heads, 1, 1) # [1, H, L, D]
+            col_embs = col_embs.repeat(1, self.num_heads, 1, 1) # [1, H, L, D]
+            assert global_embs.shape == row_embs.shape == col_embs.shape == (1, H, L, D), (global_embs.shape, row_embs.shape, col_embs.shape, (1, H, L, D))
+
+        #permute to [1, L, H, D]
+        global_embs = global_embs.permute(0, 2, 1, 3) # [1, L, H, D]
+        row_embs = row_embs.permute(0, 2, 1, 3) # [1, L, H, D]
+        col_embs = col_embs.permute(0, 2, 1, 3) # [1, L, H, D]
+        assert global_embs.shape == row_embs.shape == col_embs.shape == (1, L, H, D), (global_embs.shape, row_embs.shape, col_embs.shape, (1, L, H, D))
+        
+        return global_embs, row_embs, col_embs
+
+    def apply_learned_pos_emb(
+        self,
+        query: torch.Tensor,  # [B, L, H, D] 
+        key: torch.Tensor,    # [B, L, H, D]
+    ) :
+        B, L, H, D = query.shape
+        global_embs, row_embs, col_embs = self.get_pos_embs(query.device) # [1, L, H, D or pos_emb_dim] each
+        assert global_embs.shape == row_embs.shape == col_embs.shape
+
+        if self.cfg.use_projection_for_learned_pos_embs:
+            raise NotImplementedError('Not implemented yet')
+            # Combine all position embeddings and project to head_dim
+        else :
+            # Combine all position embeddings
+            pos_emb = global_embs + row_embs + col_embs
+            query += pos_emb
+            key += pos_emb
+            return query, key
+
+
+            
+    def apply_pos_emb(
+        self,
+        query: torch.Tensor,  # [B, L, H, D]
+        key: torch.Tensor,    # [B, L, H, D]
+        cos: torch.Tensor,    # expected broadcastable to [1, L, 1, D] or shaped [L, D]
         sin: torch.Tensor,    # same as cos
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -274,45 +399,13 @@ class Attention2DROPEAxial(nn.Module):
         Falls back to 1-D RoPE if grid info is invalid.
         """
         B, L, H, D = query.shape
-
-        cos, sin = cos[:L, :], sin[:L, :]
-        if self.cfg.use_axial_rope:
-            field_h, field_w = self.cfg.field_height, self.cfg.field_width
-            assert field_h > 0, field_w > 0
-            half = D // 2
-            dev = query.device
-            dtype = query.dtype
-
-            # Indices mapping flattened pos -> (x, y)
-            idx = torch.arange(L, device=dev)
-            x_idx = idx % field_w               # [L]
-            y_idx = idx // field_w              # [L]
-
-            cos_x = cos[x_idx, :half].to(dtype) # [L, D/2]
-            sin_x = sin[x_idx, :half].to(dtype) # [L, D/2]
-            cos_y = cos[y_idx, :half].to(dtype) # [L, D/2]
-            sin_y = sin[y_idx, :half].to(dtype) # [L, D/2]
-
-
-            # Split Q/K along the head dimension and apply RoPE per axis
-            qx, qy = query[..., :half], query[..., half:] # [B,L,H,D/2]
-            kx, ky = key  [..., :half], key  [..., half:] # [B,L,H,D/2]
-
-            qx = apply_rotary_pos_emb(qx, cos_x, sin_x) # [B,L,H,D/2]
-            qy = apply_rotary_pos_emb(qy, cos_y, sin_y) # [B,L,H,D/2]
-
-            kx = apply_rotary_pos_emb(kx, cos_x, sin_x) # [B,L,H,D/2]
-            ky = apply_rotary_pos_emb(ky, cos_y, sin_y) # [B,L,H,D/2]
-
-            query = torch.cat([qx, qy], dim=-1)
-            key   = torch.cat([kx, ky], dim=-1)
-
-            # Note: V is intentionally NOT rotated (standard RoPE usage). :contentReference[oaicite:1]{index=1}
+        if self.cfg.use_learned_pos_emb:
+            query, key = self.apply_learned_pos_emb(query, key)
         else:
-            # 1-D fallback
-            query = apply_rotary_pos_emb(query, cos, sin)
-            key = apply_rotary_pos_emb(key, cos, sin)
-
+            if self.cfg.use_axial_rope:
+                query, key = self.apply_rope_axial(query, key, cos, sin)
+            else:
+                query, key = self.apply_rope_flat(query, key, cos, sin)
         return query, key
 
         
@@ -332,7 +425,7 @@ class Attention2DROPEAxial(nn.Module):
         value = qkv[:, :, self.num_heads + self.num_key_value_heads:]
         log_debug(f'{qkv.shape = }, {query.shape = }, {key.shape = }, {value.shape = }')
 
-        query, key = self.apply_rope(query, key, cos_sin[0], cos_sin[1])
+        query, key = self.apply_pos_emb(query, key, cos_sin[0], cos_sin[1])
 
         log_debug(f'{query.shape = }, {key.shape = }, {value.shape = }')
 
@@ -353,196 +446,6 @@ class Attention2DROPEAxial(nn.Module):
         return self.o_proj(attn_output)
 
 
-    
-
-
-# class AttentionMixedRope2d(nn.Module) :
-#     def __init__(
-#         self,
-#         cfg : EncoderConfig,
-#     ):
-#         super().__init__()
-#         self.cfg = cfg
-
-#         self.hidden_size = cfg.d_model
-#         self.head_dim = cfg.d_head
-#         self.output_size = self.head_dim * cfg.n_head
-#         self.num_heads = cfg.n_head
-#         self.num_key_value_heads = cfg.n_head
-
-#         self.use_transposed_rope_for_2d_vertical_orientation = cfg.use_transposed_rope_for_2d_vertical_orientation
-#         self.width = cfg.field_width
-#         self.height = cfg.field_height
-
-#         self.qkv_proj = nn.Linear(self.hidden_size, (self.num_heads + 2 * self.num_key_value_heads) * self.head_dim, bias=False)
-#         self.o_proj = nn.Linear(self.output_size, self.hidden_size, bias=False)
-
-#         # 2D RoPE params
-#         D = cfg.d_head
-#         d_half = cfg.d_head // 2                           # complex pairs per head
-#         # one set per head (and per layer if you follow the paper)
-#         self.theta_x = nn.Parameter(torch.empty(cfg.n_head, d_half))  # learnable
-#         self.theta_y = nn.Parameter(torch.empty(cfg.n_head, d_half))  # learnable
-
-#         # Good init: log-spaced like 2-D RoPE, then start “mostly axial”
-#         t = torch.arange(d_half, dtype=torch.float32)
-#         base = 100.0 ** (- t / (D/4))             # Eq. (13) schedule
-#         with torch.no_grad():
-#             self.theta_x.copy_(base.expand(cfg.n_head, -1))  # start as x-only
-#             self.theta_y.zero_()                    # y learns from 0
-
-
-#     def apply_rope(
-#         self,
-#         query: torch.Tensor,  # [B, S, H, D]
-#         key: torch.Tensor,    # [B, S, H, D]
-#         cos: torch.Tensor,    # expected broadcastable to [1, S, 1, D] or shaped [S, D]
-#         sin: torch.Tensor,    # same as cos
-#     ) -> Tuple[torch.Tensor, torch.Tensor]:
-#         """
-#         Axial RoPE on a flattened (field_h x field_w) grid:
-#         - first half of dim D is rotated by x-positions,
-#         - second half by y-positions.
-#         Falls back to 1-D RoPE if grid info is invalid.
-#         """
-#         B, S, H, D = query.shape
-
-#         # def _to_base(cs: torch.Tensor) -> torch.Tensor:
-#         #     # Normalize cos/sin to base shape [S, D]
-#         #     if cs.dim() == 2:
-#         #         base = cs
-#         #     elif cs.dim() == 3:
-#         #         # [1, S, D] or [S, 1, D] -> try squeeze leading 1
-#         #         base = cs.squeeze(0) if cs.size(0) == 1 else cs.squeeze(1)
-#         #     elif cs.dim() == 4:
-#         #         # common HF style: [1, S, 1, D]
-#         #         base = cs[0, :, 0, :]
-#         #     else:
-#         #         raise ValueError(f"Unexpected cos/sin shape {tuple(cs.shape)}; need broadcastable to [1,S,1,D] or [S,D].")
-#         #     if base.size(0) < S:
-#         #         raise ValueError(f"cos/sin first dim ({base.size(0)}) < sequence length S ({S}).")
-#         #     return base  # [S, D]
-#         cos, sin = cos[:S, :], sin[:S, :]
-#         if self.cfg.use_axial_rope:
-#             field_h, field_w = self.cfg.field_height, self.cfg.field_width
-#             assert field_h > 0, field_w > 0
-#             half = D // 2
-#             dev = query.device
-#             dtype = query.dtype
-
-#             # Indices mapping flattened pos -> (x, y)
-#             idx = torch.arange(S, device=dev)
-#             x_idx = idx % field_w               # [S]
-#             y_idx = idx // field_w              # [S]
-
-#             # # Prepare base cos/sin for slicing
-#             # cos_base = _to_base(cos)            # [S, D] (D >= half)
-#             # sin_base = _to_base(sin)            # [S, D]
-#             sin_base = sin
-#             cos_base = cos
-#             # Gather per-axis tables and take the needed half-dim
-#             # cos_x/sin_x correspond to x positions; cos_y/sin_y to y positions
-#             # cos_x = cos_base.index_select(0, x_idx)[:, :half].view(1, S, 1, half).to(dtype)
-#             # sin_x = sin_base.index_select(0, x_idx)[:, :half].view(1, S, 1, half).to(dtype)
-#             # cos_y = cos_base.index_select(0, y_idx)[:, :half].view(1, S, 1, half).to(dtype)
-#             # sin_y = sin_base.index_select(0, y_idx)[:, :half].view(1, S, 1, half).to(dtype)
-
-#             cos_x = cos_base[x_idx, :half].to(dtype)
-#             sin_x = sin_base[x_idx, :half].to(dtype)
-#             cos_y = cos_base[y_idx, :half].to(dtype)
-#             sin_y = sin_base[y_idx, :half].to(dtype)
-
-
-#             # Split Q/K along the head dimension and apply RoPE per axis
-#             qx, qy = query[..., :half], query[..., half:]
-#             kx, ky = key  [..., :half], key  [..., half:]
-
-#             # qx, kx = apply_rotary_pos_emb(qx, kx, cos_x, sin_x)  # rotate by x
-#             # qy, ky = apply_rotary_pos_emb(qy, ky, cos_y, sin_y)  # rotate by y
-#             qx = apply_rotary_pos_emb(qx, cos_x, sin_x)
-#             qy = apply_rotary_pos_emb(qy, cos_y, sin_y)
-
-#             kx = apply_rotary_pos_emb(kx, cos_x, sin_x)
-#             ky = apply_rotary_pos_emb(ky, cos_y, sin_y)
-            
-
-#             query = torch.cat([qx, qy], dim=-1)
-#             key   = torch.cat([kx, ky], dim=-1)
-
-#             # Note: V is intentionally NOT rotated (standard RoPE usage). :contentReference[oaicite:1]{index=1}
-#         else:
-#             # 1-D fallback
-#             # query, key = apply_rotary_pos_emb(query, key, cos, sin)
-#             query = apply_rotary_pos_emb(query, cos, sin)
-#             key = apply_rotary_pos_emb(key, cos, sin)
-
-#         return query, key
-
-        
-
-#     def forward(self, cos_sin: CosSin, hidden_states: torch.Tensor) -> torch.Tensor:
-#         batch_size, seq_len, _ = hidden_states.shape
-#         log_debug(f'{hidden_states.shape = }')
-
-#         # hidden_states: [bs, seq_len, num_heads, head_dim]
-#         qkv : torch.Tensor = self.qkv_proj(hidden_states)
-#         log_debug(f'{qkv.shape = }')
-
-#         # Split head
-#         qkv = qkv.view(batch_size, seq_len, self.num_heads + 2 * self.num_key_value_heads, self.head_dim)
-#         query = qkv[:, :, :self.num_heads]
-#         key = qkv[:, :, self.num_heads: self.num_heads + self.num_key_value_heads]
-#         value = qkv[:, :, self.num_heads + self.num_key_value_heads:]
-#         log_debug(f'{qkv.shape = }, {query.shape = }, {key.shape = }, {value.shape = }')
-
-
-#         field_w = self.cfg.field_width
-
-#         idx   = torch.arange(S, device=query.device)
-#         x_idx = idx % field_w                      # [S]
-#         y_idx = idx // field_w                     # [S]
-
-#         # [S, 1, H, d_half]
-#         phase = (x_idx[:,None,None,None] * self.theta_x[None,None,:,:] +
-#                 y_idx[:,None,None,None] * self.theta_y[None,None,:,:])
-
-#         cos_t = torch.cos(phase)
-#         sin_t = torch.sin(phase)
-
-#         # expand each complex pair t to its (2t, 2t+1) channels
-#         # -> [S, 1, H, D]
-#         cos = cos_t.repeat_interleave(2, dim=-1)
-#         sin = sin_t.repeat_interleave(2, dim=-1)
-
-#         # make broadcastable for your apply_rotary_pos_emb (typical shape [1,S,H,D])
-#         cos = cos.permute(1,0,2,3)  # [1,S,H,D]
-#         sin = sin.permute(1,0,2,3)  # [1,S,H,D]
-
-
-
-#         query, key = self.apply_rope(query, key, cos_sin[0], cos_sin[1])
-
-#         log_debug(f'{query.shape = }, {key.shape = }, {value.shape = }')
-
-#         # Final permutation to [B, H, S, D]
-#         q = query.permute(0, 2, 1, 3)
-#         k = key.permute(0, 2, 1, 3)
-#         v = value.permute(0, 2, 1, 3)
-
-
-#         log_debug(f'{q.shape = }, {k.shape = }, {v.shape = }')
-
-#         attn = sdpa(q, k, v, attn_mask=None, is_causal=False)
-#         log_debug(f'{attn.shape = }')
-#         attn_output = attn.permute(0, 2, 1, 3)  # [B,S,H,D]
-#         attn_output = attn_output.view(batch_size, seq_len, self.output_size)  # type: ignore
-#         log_debug(f'{attn_output.shape = }')
-        
-#         return self.o_proj(attn_output)
-
-
-    
-
 
 class TransformerBlockHRM(nn.Module):
     def __init__(
@@ -553,7 +456,7 @@ class TransformerBlockHRM(nn.Module):
         self.cfg = cfg
         self.rotary_emb = RotaryEmbedding(
             dim = self.cfg.d_head,
-            max_position_embeddings = self.cfg.max_len,
+            max_position_embeddings = self.cfg.nb_max_rope_positions,
             base = self.cfg.rope_theta
         )
         self.self_attn = Attention2DROPEAxial(
