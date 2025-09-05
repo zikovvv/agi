@@ -310,7 +310,7 @@ def main():
     if wandb_api_key:
         os.environ["WANDB_API_KEY"] = wandb_api_key
     
-    field_width = 15
+    field_width = 9
     seq_len = -100
     expand = False
     dcfg = DatasetConfig(
@@ -327,11 +327,11 @@ def main():
         lr=1e-4,
 
         # train cfg
-        t_batch_size=2,
+        t_batch_size=4,
         t_show_nb_first_preds=0,
         t_nb_max_self_correction=1,
         t_show_in_window=False,
-        t_max_nb_aug=4,
+        t_max_nb_aug=5,
 
         # val cfg
         v_batch_size=3,
@@ -355,7 +355,6 @@ def main():
         nb_refinement_steps=1,
         nb_last_trained_steps=1,
         
-        use_cnn=False,
         enable_pseudo_diffusion_inner=False,
         enable_pseudo_diffusion_outer=True,
         feed_first_half=False,
@@ -366,11 +365,11 @@ def main():
 
         use_emb_norm = False,
         
-        use_axial_rope = False,
+        use_axial_rope = True,
         
         # learned pos emb
-        use_learned_pos_emb=True,
-        use_custom_learned_pos_emb_per_head=False,
+        use_learned_pos_emb=False,
+        use_custom_learned_pos_emb_per_head=True,
         
         # learned pos emb with custo dim
         use_projection_for_learned_pos_embs=False,        
@@ -382,6 +381,9 @@ def main():
         # neccessary for 2d learned pos embedding
         field_width=field_width,
         field_height=field_width * (2 if expand else 1),
+        
+        # cnn in each attention layer 
+        use_cnn=True,
 
     )
 
@@ -404,11 +406,12 @@ def main():
     optimizer = _get_optimizer(model, tcfg)
     atexit.register(get_cleanup_function(model, optimizer=optimizer))
     
+    task_name = 'sudoku'
     ds_raw = get_custom_ds_arc(
         seq_len=dcfg.seq_len,
         nb_samples=dcfg.num_samples,
         nb_cls=10,
-        task='fill_squares_2d',
+        task=task_name,
 
         field_width = field_width,
 
@@ -444,7 +447,7 @@ def main():
             dcfg = dcfg,
             tcfg = tcfg,
         )
-        l  = f"Epoch {epoch:02d} | "
+        l  = f"TRAIN Epoch {epoch:02d} | "
         for k, v in tr.items() : 
             l += f"{k} {v:.4f} | "
         log(f"{l}")
@@ -454,7 +457,7 @@ def main():
         train_metrics["epoch"] = epoch
         wandb.log(train_metrics)
 
-        l  = f"Epoch {epoch:02d} | "
+        l  = f"VAL Epoch {epoch:02d} | "
         with torch.no_grad():
             va = evaluate(
                 model = model,

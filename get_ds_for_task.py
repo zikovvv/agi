@@ -3,7 +3,7 @@ from typing import Dict, List, Literal, Optional, Tuple
 from matplotlib import pyplot as plt
 import numpy as np
 import tqdm
-
+from common import *
 from gen_simple_arc_ds import PuzzleNames, gen_arc_puzzle_ex
 
 def get_ds_for_masked_modeling_only_answer(
@@ -92,6 +92,7 @@ def get_custom_ds_arc(
     ],
     **kwargs,
 ) -> List[Tuple[np.ndarray, np.ndarray]] :
+    log(f'Generating custom ds for task {task} with {nb_samples} samples of seq_len {seq_len}')
     match task:
         case 'fill_between_pieces':
             bg_colors = [0, 4, 6]

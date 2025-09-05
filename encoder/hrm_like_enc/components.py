@@ -241,7 +241,153 @@ class Attention(nn.Module):
 
 
 
-class Attention2DROPEAxial(nn.Module):
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class ConvBN(nn.Module):
+    def __init__(self, in_ch, out_ch, kernel_size, stride=1, padding=0, bias=False):
+        super().__init__()
+        self.conv = nn.Conv2d(in_ch, out_ch, kernel_size, stride=stride, padding=padding, bias=bias)
+        self.bn = nn.BatchNorm2d(out_ch)
+
+    def forward(self, x):
+        x = self.conv(x)
+        x = self.bn(x)
+        return x
+
+class PreActTripleResidual(nn.Module):
+    """
+    Pre-activation residual unit:
+      BN -> ReLU -> 3x3 (hidden) -> BN -> ReLU -> 5x5 (hidden*2, with optional stride for downsample)
+      -> BN -> ReLU -> 7x7 (back to out_ch) -> add skip
+    Skip path uses 1x1 conv if shape or stride mismatch.
+    """
+    def __init__(self, in_ch, out_ch, stride=1):
+        super().__init__()
+        hidden = out_ch  # align with your 'self.hidden_size'
+        mid = hidden * 2
+
+        # Pre-activation BNs live on the input of each conv
+        self.bn1 = nn.BatchNorm2d(in_ch)
+        self.conv1 = nn.Conv2d(in_ch, hidden, kernel_size=3, stride=1, padding=1, bias=False)
+
+        self.bn2 = nn.BatchNorm2d(hidden)
+        # Place stride on the SECOND conv (ResNet v1.5 style)
+        self.conv2 = nn.Conv2d(hidden, mid, kernel_size=5, stride=stride, padding=2, bias=False)
+
+        self.bn3 = nn.BatchNorm2d(mid)
+        self.conv3 = nn.Conv2d(mid, out_ch, kernel_size=7, stride=1, padding=3, bias=False)
+
+        # Projection for skip if needed
+        if stride != 1 or in_ch != out_ch:
+            self.proj = nn.Conv2d(in_ch, out_ch, kernel_size=1, stride=stride, bias=False)
+        else:
+            self.proj = None
+
+        # Zero-init last BN gamma for better identity behavior at start (per He et al. 2016)
+        nn.init.zeros_(self.bn3.weight)
+
+    def forward(self, x):
+        identity = x
+
+        out = self.bn1(x)
+        out = F.relu(out, inplace=True)
+        if self.proj is not None:
+            identity = self.proj(out)  # preact projection (keeps math aligned)
+
+        out = self.conv1(out)
+
+        out = self.bn2(out)
+        out = F.relu(out, inplace=True)
+        out = self.conv2(out)
+
+        out = self.bn3(out)
+        out = F.relu(out, inplace=True)
+        out = self.conv3(out)
+
+        out = out + identity
+        return out
+
+# class TripleKernelResNet(nn.Module):
+#     """
+#     A ResNet-like architecture built from 3x3 -> 5x5 -> 7x7 pre-activation residual units.
+#     - Imagenet-style stem by default (7x7/2 + 3x3 maxpool).
+#     - Layers: configurable block counts per stage.
+#     - Global average pool + linear classifier.
+#     """
+#     def __init__(self, in_ch=3, num_classes=1000, layers=(2, 2, 2, 2), base_width=64, imagenet_stem=True):
+#         super().__init__()
+#         self.imagenet_stem = imagenet_stem
+
+#         if imagenet_stem:
+#             # Standard ResNet stem
+#             self.stem = nn.Sequential(
+#                 nn.Conv2d(in_ch, base_width, kernel_size=7, stride=2, padding=3, bias=False),
+#                 nn.BatchNorm2d(base_width),
+#                 nn.ReLU(inplace=True),
+#                 nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
+#             )
+#             curr_ch = base_width
+#         else:
+#             # CIFAR-style small stem
+#             self.stem = nn.Sequential(
+#                 nn.Conv2d(in_ch, base_width, kernel_size=3, stride=1, padding=1, bias=False),
+#                 nn.BatchNorm2d(base_width),
+#                 nn.ReLU(inplace=True),
+#             )
+#             curr_ch = base_width
+
+#         self.layer1, curr_ch = self._make_stage(curr_ch, base_width, layers[0], stride=1)
+#         self.layer2, curr_ch = self._make_stage(curr_ch, base_width * 2, layers[1], stride=2)
+#         self.layer3, curr_ch = self._make_stage(curr_ch, base_width * 4, layers[2], stride=2)
+#         self.layer4, curr_ch = self._make_stage(curr_ch, base_width * 8, layers[3], stride=2)
+
+#         self.head = nn.Sequential(
+#             nn.BatchNorm2d(curr_ch),  # final pre-activation touch
+#             nn.ReLU(inplace=True),
+#             nn.AdaptiveAvgPool2d(1),
+#         )
+#         self.fc = nn.Linear(curr_ch, num_classes)
+
+#         self._init_weights()
+
+#     def _make_stage(self, in_ch, out_ch, blocks, stride):
+#         layers = []
+#         layers.append(PreActTripleResidual(in_ch, out_ch, stride=stride))
+#         for _ in range(1, blocks):
+#             layers.append(PreActTripleResidual(out_ch, out_ch, stride=1))
+#         return nn.Sequential(*layers), out_ch
+
+#     def _init_weights(self):
+#         # He (Kaiming) initialization for convs; BN gamma=1, beta=0 by default
+#         for m in self.modules():
+#             if isinstance(m, nn.Conv2d):
+#                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+#             elif isinstance(m, nn.BatchNorm2d):
+#                 if m.weight is not None:
+#                     nn.init.ones_(m.weight)
+#                 if m.bias is not None:
+#                     nn.init.zeros_(m.bias)
+#             elif isinstance(m, nn.Linear):
+#                 nn.init.normal_(m.weight, 0, 0.01)
+#                 if m.bias is not None:
+#                     nn.init.zeros_(m.bias)
+
+#     def forward(self, x):
+#         x = self.stem(x)
+#         x = self.layer1(x)
+#         x = self.layer2(x)
+#         x = self.layer3(x)
+#         x = self.layer4(x)
+#         x = self.head(x)
+#         x = torch.flatten(x, 1)
+#         x = self.fc(x)
+#         return x
+
+
+
+class Attention2DMultiPurpose(nn.Module):
     def __init__(
         self,
         cfg : EncoderConfig,
@@ -273,6 +419,31 @@ class Attention2DROPEAxial(nn.Module):
         different_embs_coeff = 3
         self.pos_embeddings_projection = nn.Linear(cfg.learned_pos_embs_dim * different_embs_coeff + self.head_dim, self.head_dim)
 
+
+        self.cnn = nn.Sequential(
+            nn.Conv2d(self.hidden_size, self.hidden_size * 2, kernel_size=3, padding=1),
+            nn.GELU(),
+            nn.BatchNorm2d(self.hidden_size * 2),
+            nn.Conv2d(self.hidden_size * 2, self.hidden_size * 2, kernel_size=5, padding=2),
+            nn.GELU(),
+            nn.BatchNorm2d(self.hidden_size * 2),
+            nn.Conv2d(self.hidden_size * 2, self.hidden_size, kernel_size=7, padding=3),
+        )
+        
+    def apply_cov_layer(self, hidden_states : torch.Tensor) -> torch.Tensor :
+        hiddens_2d = hidden_states.permute(0, 2, 1).contiguous().view(hidden_states.size(0), self.cfg.d_model, self.cfg.field_height, self.cfg.field_width) # [B, D, H, W]
+        assert hiddens_2d.shape[2] == self.cfg.field_height and hiddens_2d.shape[3] == self.cfg.field_width
+        _____hiddens_2d_clone_reversed = hiddens_2d.clone().detach().view(hiddens_2d.size(0), self.cfg.d_model, -1).permute(0, 2, 1) # [B, H*W, D]
+        assert _____hiddens_2d_clone_reversed.shape == hidden_states.shape, (_____hiddens_2d_clone_reversed.shape, hidden_states.shape)
+        assert _____hiddens_2d_clone_reversed.isclose(hidden_states).all()
+        hiddens_2d = self.cnn(hiddens_2d) + hiddens_2d # [B, D, H, W] 
+        hidden_states = hiddens_2d.view(hiddens_2d.size(0), self.cfg.d_model, -1).permute(0, 2, 1) # [B, H*W, D]             
+        
+
+        return hidden_states
+            
+            
+        
     def apply_rope_flat(
         self,
         query: torch.Tensor,  # [B, S, H, D]
@@ -411,6 +582,10 @@ class Attention2DROPEAxial(nn.Module):
         
 
     def forward(self, cos_sin: CosSin, hidden_states: torch.Tensor) -> torch.Tensor:
+        assert self.cfg.field_width > 0 and self.cfg.field_height > 0, "field_width and field_height must be > 0"
+        if self.cfg.use_cnn :
+            hidden_states = self.apply_cov_layer(hidden_states)
+        
         B, L, D = hidden_states.shape # [B, L, D]
         log_debug(f'{hidden_states.shape = }')
 
@@ -459,7 +634,7 @@ class TransformerBlockHRM(nn.Module):
             max_position_embeddings = self.cfg.nb_max_rope_positions,
             base = self.cfg.rope_theta
         )
-        self.self_attn = Attention2DROPEAxial(
+        self.self_attn = Attention2DMultiPurpose(
             cfg=cfg
         )
         self.mlp = SwiGLU(
