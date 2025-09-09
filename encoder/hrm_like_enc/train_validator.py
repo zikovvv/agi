@@ -1,7 +1,7 @@
 import atexit
 import json
 import tqdm
-from encoder.hrm_like_enc.config import DatasetConfig, TrainConfig, EncoderConfig            
+from encoder.hrm_like_enc.config import DatasetConfig, TrainConfig, ModelConfig            
 from encoder.hrm_like_enc.inference import augment_colors_batch, augmented_inference_batched, augmented_inference_batched_with_voting
 from gen_simple_arc_ds import PuzzleNames
 from get_dataloader_for_model_for_task import get_dataloaders_for_flat_seq_cls, get_dataloaders_for_encoder_masked_modeling
@@ -286,7 +286,7 @@ def evaluate_one_epoch(
     acc = total_correct / total_classified
     return {"loss": avg_loss, "acc": acc}
     
-def _get_model(mcfg : EncoderConfig, tcfg : TrainConfig) -> EncoderForValidation :
+def _get_model(mcfg : ModelConfig, tcfg : TrainConfig) -> EncoderForValidation :
     model = EncoderForValidation(mcfg).to(tcfg.device)
     return model
 
@@ -304,7 +304,7 @@ logger.add(sys.stderr, level="INFO")
 def main(
     dcfg : Optional[DatasetConfig] = None,
     tcfg : Optional[TrainConfig] = None,
-    mcfg : Optional[EncoderConfig] = None,
+    mcfg : Optional[ModelConfig] = None,
 ):
     field_width = 15
     seq_len = -100
@@ -320,7 +320,7 @@ def main(
         batch_size=2,
         lr=3e-4
     ) if tcfg is None else tcfg
-    mcfg = EncoderConfig(
+    mcfg = ModelConfig(
         d_model=128,
         n_head=8,
         d_head=32,

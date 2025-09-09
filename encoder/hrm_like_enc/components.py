@@ -5,7 +5,7 @@ from torch import nn
 import torch.nn.functional as F
 from torch.nn.functional import scaled_dot_product_attention as sdpa
 from common import *
-from encoder.hrm_like_enc.config import EncoderConfig
+from encoder.hrm_like_enc.config import ModelConfig
 from x_transformers import Encoder as XEncoder
 
 
@@ -149,7 +149,7 @@ class RotaryEmbedding(nn.Module):
 class Attention(nn.Module):
     def __init__(
         self,
-        cfg : EncoderConfig,
+        cfg : ModelConfig,
     ):
         super().__init__()
 
@@ -390,7 +390,7 @@ class PreActTripleResidual(nn.Module):
 class Attention2DMultiPurpose(nn.Module):
     def __init__(
         self,
-        cfg : EncoderConfig,
+        cfg : ModelConfig,
     ):
         super().__init__()
         self.cfg = cfg
@@ -625,7 +625,7 @@ class Attention2DMultiPurpose(nn.Module):
 class TransformerBlockHRM(nn.Module):
     def __init__(
         self,
-        cfg : EncoderConfig,
+        cfg : ModelConfig,
     ) -> None:
         super().__init__()
         self.cfg = cfg

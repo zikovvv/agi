@@ -4,7 +4,7 @@ import tqdm
 import os
 import wandb
 from dotenv import load_dotenv
-from encoder.hrm_like_enc.config import DatasetConfig, TrainConfig, EncoderConfig            
+from encoder.hrm_like_enc.config import DatasetConfig, TrainConfig, ModelConfig            
 from encoder.hrm_like_enc.hrm_lucidrains import HRM
 from encoder.hrm_like_enc.inference import augment_colors_batch, augmented_inference_batched, augmented_inference_batched_with_voting
 from gen_simple_arc_ds import PuzzleNames
@@ -31,7 +31,7 @@ def train_one_epoch(
     model: nn.Module,
     loader: DataLoader,
     optimizer: torch.optim.Optimizer,
-    mcfg : EncoderConfig,
+    mcfg : ModelConfig,
     dcfg : DatasetConfig,
     tcfg : TrainConfig,
 ) -> Dict[str, float]:
@@ -50,7 +50,7 @@ def train_one_epoch(
     for bid, batch in enumerate(tqdm.tqdm(loader, total=len(loader))):
         input_ids, labels = batch['input_ids'], batch['labels']
         
-        if bid < tcfg.t_show_nb_first_preds:
+        if bid < tcfg.t_show_nb_b:
             log(f'{input_ids.shape = }, {labels.shape = }')
             plot_batch(
                 data=[
@@ -152,7 +152,7 @@ def self_correction_val(
 def evaluate(
     model: nn.Module,
     loader: DataLoader,
-    mcfg : EncoderConfig,
+    mcfg : ModelConfig,
     dcfg : DatasetConfig,
     tcfg : TrainConfig,
 ) -> Dict[str, float]:
@@ -241,7 +241,7 @@ def evaluate(
                 vocab_size=mcfg.vocab_size,
                 show_to_window=tcfg.v_show_in_window,
                 max_aug=tcfg.v_max_nb_aug,
-                debug=bit < tcfg.v_show_nb_first_preds
+                debug=bit < tcfg.v_show_nb_b
             )
             nb_total_cor_aug += nb_cor_aug
             nb_total_labels_aug += nb_labels_aug
@@ -250,7 +250,7 @@ def evaluate(
             nb_total_cor_vote += nb_cor_voting
             nb_total_labels_vote += nb_labels_vote
 
-        if bit < tcfg.v_show_nb_first_preds:
+        if bit < tcfg.v_show_nb_b:
             plot_batch(
                 data=[
                     input_ids[:10, :],
@@ -286,7 +286,7 @@ def evaluate(
     }
 
 
-def _get_model(mcfg : EncoderConfig, tcfg : TrainConfig) -> EncoderForCLS :
+def _get_model(mcfg : ModelConfig, tcfg : TrainConfig) -> EncoderForCLS :
     model = EncoderForCLS(mcfg).to(tcfg.device)
     return model
 
@@ -328,7 +328,7 @@ def main():
 
         # train cfg
         t_batch_size=4,
-        t_show_nb_first_preds=0,
+        t_show_nb_b=0,
         t_nb_max_self_correction=1,
         t_show_in_window=False,
         t_max_nb_aug=5,
@@ -339,10 +339,10 @@ def main():
         v_do_augmented_inference=False,
         v_show_in_window=False,
         v_max_nb_aug=20,
-        v_show_nb_first_preds=1
+        v_show_nb_b=1
     )
     
-    mcfg = EncoderConfig(
+    mcfg = ModelConfig(
         d_model=128,
         n_head=8,
         d_head=64,
@@ -436,6 +436,7 @@ def main():
         add_labels_to_inputs=dcfg.add_labels_to_inputs,
         add_sep=dcfg.add_sep,
         expand=dcfg.expand,
+        expand_inputs_token_id=mcfg.pad_token_id
     )
     epoch = 0
     while 1 :
