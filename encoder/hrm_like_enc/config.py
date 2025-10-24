@@ -4,7 +4,7 @@ import torch
 
 
 @dataclass
-class EncoderConfig:
+class ModelConfig:
    # Model dims
     d_model: int = 512
     n_head: int = 8
@@ -59,6 +59,11 @@ class EncoderConfig:
     use_projection_for_learned_pos_embs: bool = False  # whether to project the learned pos emb to d_head dim
     use_custom_learned_pos_emb_per_head: bool = False  # whether to have a separate learned pos emb for each head (increases param count a lot)
 
+    trained_inputs_vocab_size : int = 11
+    
+    
+    
+    
 @dataclass
 class DatasetConfig:
     num_samples: int = 600    # dataset size
@@ -79,17 +84,23 @@ class TrainConfig:
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
 
     t_batch_size: int = 32
-    t_show_nb_first_preds: int = 2
+    t_show_nb_b: int = 2
     t_nb_max_self_correction: int = 15
     t_show_in_window: bool = False
     t_max_nb_aug: int = 5
+    t_nb_steps_optimize_inputs: int = 10
+    t_nb_inp_opt_steps: int = 0
     
     v_batch_size: int = 8
+    v_show_nb_b : int = 2
     v_nb_max_self_correction : int = 10
     v_do_augmented_inference : bool = True
     v_show_in_window : bool = False
     v_max_nb_aug : int = 5
-    v_show_nb_first_preds : int = 2
+    v_nb_steps_optimize_inputs: int = 10
+    v_nb_inp_opt_steps: int = 0
+        
+
     
     
     

@@ -174,7 +174,7 @@ def get_dataloaders_for_encoder_masked_modeling(
     return train_dataloader, val_dataloader
 
 def ex1 ():
-    def plot_batch_data(batch : Dict[str, torch.Tensor]) :
+    def plot_batch_data(bawwwwwwtch : Dict[str, torch.Tensor]) :
         import matplotlib.pyplot as plt
         B, L = batch['input_ids'].shape
         MAX_COLOR = 30
@@ -472,7 +472,8 @@ def get_dataloaders_for_flat_seq_cls(
     add_sep : bool,
     add_labels_to_inputs : bool,
     expand : bool,
-    device : str
+    device : str,
+    expand_inputs_token_id : int
 ) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
     def get_as_input_and_labels_pairs() -> List[Tuple[torch.Tensor, torch.Tensor]]:
         res = []
@@ -485,7 +486,7 @@ def get_dataloaders_for_flat_seq_cls(
                 # Create sequence: input + sep + masked_tokens
                 sep_shift = int(add_sep)
                 total_len = input_tensor.shape[0] + sep_shift + output_tensor.shape[0]
-                input_ids = torch.full((total_len,), pad_token_id, dtype=torch.long)
+                input_ids = torch.full((total_len,), expand_inputs_token_id, dtype=torch.long)
                 labels = torch.full((total_len,), ignore_label_id, dtype=torch.long)
                 
                 # Fill input part
@@ -497,7 +498,7 @@ def get_dataloaders_for_flat_seq_cls(
                 if add_labels_to_inputs:
                     input_ids[input_tensor.shape[0] + sep_shift:] = output_tensor
                 else:
-                    input_ids[input_tensor.shape[0] + sep_shift:] = pad_token_id
+                    input_ids[input_tensor.shape[0] + sep_shift:] = expand_inputs_token_id
                 
                 # Set labels for output part only
                 labels[input_tensor.shape[0] + sep_shift:] = output_tensor
@@ -581,7 +582,8 @@ def ex3():
         add_sep=True,
         device=device,
         add_labels_to_inputs=False,
-        expand=True
+        expand=True,
+        expand_inputs_token_id=pad_token_id
     )
 
     for batch in train_dl:

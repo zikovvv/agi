@@ -5,6 +5,7 @@ import numpy as np
 import tqdm
 from common import *
 from gen_simple_arc_ds import PuzzleNames, gen_arc_puzzle_ex
+import wandb
 
 def get_ds_for_masked_modeling_only_answer(
     ds : List[Tuple[np.ndarray, np.ndarray]],
@@ -79,7 +80,6 @@ def get_ds_1d_seq_for_random_input_with_some_transformation_for_output(
     return [(s, s) for s in seq]
 
 
-
 def get_custom_ds_arc(
     seq_len : int,
     nb_samples : int,
@@ -93,6 +93,10 @@ def get_custom_ds_arc(
     **kwargs,
 ) -> List[Tuple[np.ndarray, np.ndarray]] :
     log(f'Generating custom ds for task {task} with {nb_samples} samples of seq_len {seq_len}')
+    # if there is wandb then log to wandb
+    if wandb.run is not None:
+        wandb.log({"custom_ds_task": task, "custom_ds_samples": nb_samples, "custom_ds_seq_len": seq_len, 'kwargs' : str(kwargs)})
+
     match task:
         case 'fill_between_pieces':
             bg_colors = [0, 4, 6]

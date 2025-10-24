@@ -7,15 +7,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from encoder.hrm_like_enc.components import TransformerBlockHRM
-from encoder.hrm_like_enc.config import EncoderConfig
+from encoder.hrm_like_enc.config import ModelConfig
 from common import *
 from x_transformers import Encoder as XEncoder
 
 
 class EncoderModel(nn.Module):
-    def __init__(self, cfg: EncoderConfig):
+    def __init__(self, cfg: ModelConfig):
         super().__init__()
-        self.cfg : EncoderConfig = cfg
+        self.cfg : ModelConfig = cfg
 
         d = cfg.d_model
 
@@ -166,7 +166,7 @@ class EncoderModel(nn.Module):
 
 
 class EncoderForCLS(nn.Module):
-    def __init__(self, cfg: EncoderConfig):
+    def __init__(self, cfg: ModelConfig):
         super().__init__()
         self.cfg = cfg
         self.encoder = EncoderModel(cfg)
@@ -189,7 +189,7 @@ class EncoderForCLS(nn.Module):
         return out
 
 class EncoderForValidation(nn.Module) :
-    def __init__(self, cfg: EncoderConfig):
+    def __init__(self, cfg: ModelConfig):
         super().__init__()
         self.cfg = cfg
         self.encoder = EncoderModel(cfg)
