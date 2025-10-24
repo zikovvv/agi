@@ -7,6 +7,7 @@ from pydantic import BaseModel
 import tqdm
 import os
 import wandb
+import time
 from dotenv import load_dotenv
 from encoder.hrm_like_enc.config import DatasetConfig, TrainConfig, ModelConfig            
 from encoder.hrm_like_enc.hrm_lucidrains import HRM
@@ -152,18 +153,22 @@ class CNNEncoder2d(ModelEncoderBase):
         assert hiddens.shape == (B, self.h * self.w, self.dim), f"hiddens must be [B, {self.h * self.w}, {self.dim}], got {hiddens.shape}"
         return hiddens
 
+
+
+
 class CNNEncoder1d(ModelEncoderBase):
     def __init__(self, mcfg: ModelConfig):
         super().__init__()
         self.cfg = mcfg
         self.dim = self.cfg.d_model
+        activation = nn.ReLU()
         self.cnn = nn.Sequential(
             nn.Conv1d(self.dim, self.dim * 2, kernel_size=3, padding=1),
-            nn.ReLU(),
+            activation,
             nn.Conv1d(self.dim * 2, self.dim * 2, kernel_size=5, padding=2),
-            nn.ReLU(),
+            activation,
             nn.Conv1d(self.dim * 2, self.dim, kernel_size=7, padding=3),
-            nn.ReLU(),
+            activation,
         )
 
     def forward(
@@ -255,9 +260,12 @@ class ModelClsCritic(nn.Module):
     class Res:
         cls_logits: torch.Tensor
         cls_preds: torch.Tensor
-        nb_cor_cls: int = 0
         nb_cls: int = 0
-        nb_cor: int = 0
+        nb_cor_gt: int = 0
+        nb_tp: int = 0
+        nb_fp: int = 0
+        nb_fn: int = 0
+        nb_tn: int = 0
         cls_labels: Optional[torch.Tensor] = None
         loss: Optional[torch.Tensor] = None
 
@@ -291,7 +299,7 @@ class ModelClsCritic(nn.Module):
         self,
         inputs: torch.Tensor,
         is_ids: bool, # if true, inputs are ids, else onehots
-        color_labels: Optional[torch.Tensor] = None, # color labels
+        color_labels: Optional[torch.Tensor] # color labels
     ) -> Res:                
         B, *SHAPE, _ = inputs.shape
         D = self.cfg.d_model
@@ -310,17 +318,29 @@ class ModelClsCritic(nn.Module):
         )
         preds = res_cls.preds.reshape(B, *SHAPE)  # [B, ...]
 
-        mask_classifiable = color_labels != self.cfg.ignore_id if color_labels is not None else torch.ones_like(preds) # mask classifiable does not need to equal mask trainable
-        nb_actually_right_cells_in_input = (color_labels[mask_classifiable] == 1).sum().item() if color_labels is not None else 0
-        nb_classified_right = (preds[mask_classifiable] == color_labels[mask_classifiable]).sum().item() if color_labels is not None else 0
+        mask_classifiable = color_labels != self.cfg.ignore_id if color_labels is not None else torch.ones_like(preds).bool() # mask classifiable does not need to equal mask trainable
+        
+        # assert (color_labels != self.cfg.ignore_id).shape == (B, *SHAPE)# == color_labels.shape == preds.shape == cls_labels.shape
+        # log(f'{mask_classifiable.shape = }')
+        # log(f'{mask_classifiable = }')
+        # log(f'{color_labels = }')
+        nb_actually_right_cells_in_input = (cls_labels[mask_classifiable] == 1).sum().item() if cls_labels is not None else 0
+        nb_tp = ((preds[mask_classifiable] == 1) & (cls_labels[mask_classifiable] == 1)).sum().item() if cls_labels is not None else 0
+        nb_fp = ((preds[mask_classifiable] == 1) & (cls_labels[mask_classifiable] == 0)).sum().item() if cls_labels is not None else 0
+        nb_fn = ((preds[mask_classifiable] == 0) & (cls_labels[mask_classifiable] == 1)).sum().item() if cls_labels is not None else 0
+        nb_tn = ((preds[mask_classifiable] == 0) & (cls_labels[mask_classifiable] == 0)).sum().item() if cls_labels is not None else 0 
         nb_classifiable = mask_classifiable.sum().item() if color_labels is not None else 0
+        # log(f'{nb_actually_right_cells_in_input = }, {nb_classified_right = }, {nb_classifiable = }')
         return self.Res(
             loss=res_cls.loss,
             cls_logits=res_cls.logits,
             cls_preds=preds,
-            nb_cor_cls=int(nb_classified_right),
-            nb_cor=int(nb_actually_right_cells_in_input),
+            nb_tp=int(nb_tp),
+            nb_fp=int(nb_fp),
+            nb_fn=int(nb_fn),
+            nb_tn=int(nb_tn),
             nb_cls=int(nb_classifiable),
+            nb_cor_gt=int(nb_actually_right_cells_in_input),
             cls_labels=cls_labels
         )
     
@@ -352,6 +372,7 @@ class TrainableInputsWrapper(nn.Module):
         
         initial_logits = self.onehots.clone().detach() # [B, H, W, V]
         if self.replace_trainable_and_untrainable :
+            log('LKDSALDJSADLKJSADLJSA')
             initial_logits[self.trainable_mask == 1] = 1.0 / inputs_vocab_size # uniform distribution for trainable cells
         self.trainable_inputs : nn.Parameter = nn.Parameter(initial_logits) # [B, H, W, V]
 
@@ -398,7 +419,7 @@ def unfreeze(model: nn.Module):
 class ProcessBatchOutput:
     loss: float = 0
     nb_cor: int = 0
-    nb_total_cls: int = 0
+    nb_cls: int = 0
 
     nb_steps: int = 1
 
@@ -424,7 +445,7 @@ class EpochOutput:
     nb_steps: int = 0
     loss: float = 0.0
     nb_cor: int = 0
-    nb_total_cls: int = 0
+    nb_cls: int = 0
     
     # calculated
     mean_acc: float = 0.0
@@ -433,7 +454,7 @@ class EpochOutput:
     
     def calculate(self):
         self.mean_loss = self.loss / max(1, self.nb_steps)
-        self.mean_acc = self.nb_cor / max(1, self.nb_total_cls)
+        self.mean_acc = self.nb_cor / max(1, self.nb_cls)
 
 
 
@@ -475,7 +496,7 @@ def process_batch_direct(
         loss=res_loss if res_loss is not None else 0.0,
         logits=outputs.logits,
         hiddens=outputs.hiddens,
-        nb_total_cls=outputs.nb_total,
+        nb_cls=outputs.nb_total,
         nb_cor=outputs.nb_corr,
     )
 
@@ -522,7 +543,7 @@ def do_one_epoch_direct(
         
         ret.nb_steps += 1
         ret.loss += res.loss
-        ret.nb_total_cls += res.nb_total_cls
+        ret.nb_cls += res.nb_cls
         ret.nb_cor += res.nb_cor
     
     ret.calculate()
@@ -596,6 +617,7 @@ def train_on_direct_objective(
 
             epoch += 1
     except KeyboardInterrupt :
+        input("Press Enter to confirm saving model, else press ctrl+c...")
         log("Training interrupted by user")
     save_models(encoder_model, encoder_path)
     save_models(cls_model, classifier_path)
@@ -624,9 +646,10 @@ def optimize_inputs(
         inputs_vocab_size=inputs_vocab_size,
         replace_trainable=expand
     ).to(input_ids.device)
-    optimizer_input_trainer = torch.optim.AdamW(input_trainer.parameters(), lr=1e-2)
+    optimizer_input_trainer = torch.optim.AdamW(input_trainer.parameters(), lr=1e-2, betas=(0.9, 0.98), weight_decay=1e-2)
 
     cached_intermediate_inputs: List[torch.Tensor] = [input_trainer.trainable_inputs.detach().clone()]
+    last_frac_equals = 0.0
     if nb_steps  > 0 :
         freeze(model)
         for step in range(nb_steps):
@@ -635,9 +658,15 @@ def optimize_inputs(
             inp_loss = res_ingrad.trained_input_loss
             inp_loss.backward()
             optimizer_input_trainer.step()
-            # log(f'{inp_loss.item() = }')
-            cached_intermediate_inputs.append(input_trainer.trainable_inputs.detach().clone())
             total_loss += inp_loss.item()
+            trained_ids = res_ingrad.trained_logits.argmax(dim=-1)
+            assert trained_ids.shape == input_ids.shape
+            equals = trained_ids == input_ids
+            frac_equals = round(float(equals.sum().item() / equals.numel()), 4)
+            if abs(last_frac_equals - frac_equals) > 0.0001 :
+                last_frac_equals = frac_equals
+                cached_intermediate_inputs.append(input_trainer.trainable_inputs.detach().clone())
+                log(f'Step {step + 1}/{nb_steps}, input loss: {inp_loss.item():.4f}, frac equal to original: {frac_equals:.4f}')
     else :
         total_loss = 0.0
     return total_loss, cached_intermediate_inputs
@@ -651,12 +680,12 @@ def process_batch_ctitic_optimize_inputs(
     mcfg: ModelConfig,
     tcfg: TrainConfig,
     dcfg: DatasetConfig,
-    do : ProcessBatchDo = ProcessBatchDo.train,
+    do_train: bool,
     optimizer: Optional[torch.optim.Optimizer] = None,
 ) -> ProcessBatchOutput:
     ret : ProcessBatchOutput = ProcessBatchOutput()
     B, H, W = input_ids.shape[0], mcfg.field_height, mcfg.field_width
-    nb_steps_optimize_inputs = tcfg.t_nb_inp_opt_steps if do == ProcessBatchDo.train else tcfg.v_nb_inp_opt_steps
+    nb_steps_optimize_inputs = tcfg.t_nb_inp_opt_steps if do_train else tcfg.v_nb_inp_opt_steps
 
     total_inputs_loss, cached_intermediate_inputs  = optimize_inputs(
         input_ids=input_ids,
@@ -666,34 +695,22 @@ def process_batch_ctitic_optimize_inputs(
         expand=dcfg.expand,
         inputs_vocab_size=mcfg.trained_inputs_vocab_size
     )
-    # if nb_steps_optimize_inputs > 0 :
-    #     ret.trained_logits = res_ingrad.trained_logits.detach()
-    #     trained_ids = ret.trained_logits.argmax(dim=-1)
-    #     plot_batch(
-    #         data=[
-    #             input_ids[:10, :],
-    #             color_labels[:10, :],
-    #             trained_ids[:10, :],
-    #         ],
-    #         height=H,
-    #         width=W,
-    #         show_to_window=True,
-    #     )
-        
+    last_trained_input = cached_intermediate_inputs[-1]
+    last_pred = last_trained_input.argmax(dim=-1)
+    last_pred_acc = (last_pred[color_labels != mcfg.ignore_id] == color_labels[color_labels != mcfg.ignore_id]).sum().item() / (color_labels != mcfg.ignore_id).sum().item()
+    # log(f'Batch {bid}: optimized inputs loss: {total_inputs_loss:.4f}, last pred acc: {last_pred_acc:.4f}, nb cached intermediate inputs: {len(cached_intermediate_inputs)}')
+    if last_pred_acc != 1.0 :
+        log_warn(f'Batch {bid}: optimized last pred acc: {last_pred_acc:.4f}, nb cached intermediate inputs: {len(cached_intermediate_inputs)}')
+        log(f'{last_pred[0] = }, {color_labels[0] = }')
 
-    # in inference mode we just train inputs logits with freezed model and return them
-    if do == ProcessBatchDo.inference:
-        return ret
-    # log('====================================')
-    if do == ProcessBatchDo.train:
+    if do_train:
         assert optimizer is not None
         unfreeze(model)
         optimizer.zero_grad(set_to_none=True)
-    elif do == ProcessBatchDo.val:
+    else:
         freeze(model)
-        
+    
     for intermediate_inputs in cached_intermediate_inputs:
-        # log(f'{intermediate_inputs.shape = }')
         res_cls: ModelClsCritic.Res = model(
             intermediate_inputs,
             is_ids=False,
@@ -703,38 +720,21 @@ def process_batch_ctitic_optimize_inputs(
         assert res_cls.loss is not None
         cls_loss = res_cls.loss
 
-        if do == ProcessBatchDo.train:
+        if do_train:
             assert optimizer is not None
             cls_loss.backward()
-            
+   
         ret.loss += cls_loss.item()
-        ret.nb_cor += res_cls.nb_cor_cls
-        ret.nb_total_cls += res_cls.nb_cls
-        
-        # log(f'{res_cls.nb_cor = }, {res_cls.nb_cor_cls = }, {cls_loss.item() = }')
-    # log('====================================')
-    if do == ProcessBatchDo.train:
+        ret.nb_cor += res_cls.nb_tp + res_cls.nb_tn
+        ret.nb_cls += res_cls.nb_cls
+
+    if do_train:
         assert optimizer is not None
-        # log(f'OPTIMIZING MAIN MODEL')
-        # plot_batch(
-        #     data=[
-        #         input_ids[:10, :],
-        #         color_labels[:10, :],
-        #         cached_intermediate_inputs[0].argmax(dim=-1)[:10, :],
-        #     ],
-        #     height=H,
-        #     width=W,
-        #     show_to_window=tcfg.t_show_in_window,
-        # )
-        
         assert cached_intermediate_inputs[0].argmax(dim=-1).equal(input_ids), "First cached input must be equal to original input"
-        
         optimizer.step()
-    
-    
-    
+
     return ret
-            
+
 
 def do_one_epoch_critic(
     model: nn.Module,
@@ -754,18 +754,6 @@ def do_one_epoch_critic(
     for bid, batch in enumerate(tqdm.tqdm(loader, total=len(loader))):
         input_ids, color_labels = batch['input_ids'], batch['labels']
         
-        # if bid < tcfg.t_show_nb_b:
-        #     log(f'{input_ids.shape = }, {color_labels.shape = }')
-        #     plot_batch(
-        #         data=[
-        #             input_ids[:10, :],
-        #             color_labels[:10, :],
-        #         ],
-        #         height=H,
-        #         width=W,
-        #         show_to_window=tcfg.t_show_in_window,
-        #     )
-            
         if tcfg.t_max_nb_aug  > 0 :
             colors_orig, colors_perms, input_ids, color_labels = augment_colors_batch(
                 input_ids,
@@ -785,34 +773,13 @@ def do_one_epoch_critic(
             mcfg=mcfg,
             tcfg=tcfg,
             dcfg=dcfg,
-            do=ProcessBatchDo.train if do_train else ProcessBatchDo.val,
+            do_train=do_train,
         )
         
         ret.nb_steps += 1
         ret.loss += res.loss
-        ret.nb_total_cls += res.nb_total_cls
+        ret.nb_cls += res.nb_cls
         ret.nb_cor += res.nb_cor
-        
-        # if bid < tcfg.t_show_nb_b:
-        #     trained_ids = res.trained_logits.argmax(dim=-1)
-        #     r : ModelValidator.Res = model(input_ids.reshape(-1, H, W)[:10, ...],color_labels=color_labels.reshape(-1, H, W)[:10, ...])
-        #     cls_preds = r.cls_preds
-        #     cls_labels = r.cls_labels
-        #     assert cls_labels is not None
-        #     log(f'{input_ids.shape = }, {color_labels.shape = }, {cls_preds.shape = }, {cls_labels.shape = }')
-        #     plot_batch(
-        #         data=[
-        #             input_ids[:10, :],
-        #             color_labels[:10, :],
-        #             cls_preds[:10, :],
-        #             cls_labels[:10, :],
-        #             trained_ids[:10, :]
-        #         ],
-        #         height=H,
-        #         width=W,
-        #         show_to_window=tcfg.t_show_in_window,
-        #     )
-        
         
     ret.calculate()
     return ret
@@ -882,6 +849,7 @@ def train_on_critic_objective(
 
             epoch += 1
     except KeyboardInterrupt :
+        input("Press Enter to confirm saving model, else press ctrl+c...")
         log("Training interrupted by user")
 
     save_models(encoder_model, path=os.path.join(checkpoint_path, "encoder.pth"))
@@ -982,7 +950,6 @@ def main():
         trained_inputs_vocab_size=11,
 
     )
-
 
     wandb.init(
         project="intputs_gradient_optimization",
@@ -1089,22 +1056,6 @@ def main():
         load_if_path(encoder_model, chkpt_path=chkpt_path_encoder)
         return encoder_model, cls_model 
 
-    # def create_critic_and_cls_models(
-    #     chkpt_path_encoder : Optional[str] = None,
-    #     chkpt_path_classifier : Optional[str] = None,
-    #     chkpt_path_critic : Optional[str] = None,
-    #     load_from_pretrained_cls : bool = False,
-    # ) :
-    #     encoder = create_encoder_model()
-    #     cls_model = create_classifier_model(encoder, vocab_size=2)
-    #     critic_model = create_critic_model(cls_model)
-    #     load_if_path(critic_model, chkpt_path=chkpt_path_critic)
-    #     load_if_path(cls_model, chkpt_path=chkpt_path_classifier)
-    #     load_if_path(encoder, chkpt_path=chkpt_path_encoder)
-    #     if load_from_pretrained_cls :
-    #         critic_model.embedding = cls_model.embeddings
-    #     return encoder, cls_model, critic_model
-
     def save_models(model : nn.Module, path : str) :
         os.makedirs(os.path.dirname(path), exist_ok=True)
         torch.save(model.state_dict(), path)
@@ -1127,36 +1078,49 @@ def main():
         )
         return train_dl, val_dl
 
-    # train_on_direct_objective(
-    #     create_models=create_cls_models,
-    #     create_optimizer=create_model_optimizer,
-    #     create_dataloaders=create_dataloaders,
-    #     save_models=save_models,
-    #     checkpoint_path='./models/pretrained_cls/',
-    #     mcfg=mcfg,
-    #     dcfg=dcfg,
-    #     tcfg=tcfg,
-    # )
+    train_on_direct_objective(
+        create_models=create_cls_models,
+        create_optimizer=create_model_optimizer,
+        create_dataloaders=create_dataloaders,
+        save_models=save_models,
+        checkpoint_path='./models/pretrained_cls/',
+        mcfg=mcfg,
+        dcfg=dcfg,
+        tcfg=tcfg,
+    )
     
 
-    def init_critic_from_pretrained_cls():
-        path = './models/pretrained_cls/'
+    def init_critic_from_pretrained_cls_or_critic(from_cls: bool = True):
+        path = './models/pretrained_cls/' if from_cls else './models/critic/'
         encoder_path = os.path.join(path, "encoder.pth")
         classifier_path = os.path.join(path, "classifier.pth")
-        encoder_model, cls_direct_objective = create_cls_models(
-            vocab_size=mcfg.vocab_size,
-            chkpt_path_encoder=encoder_path,    
-            chkpt_path_classifier=classifier_path
-        )
-        _, cls_critic = create_cls_models(
-            vocab_size=2,
-        )
-        critic_model = create_critic_model(cls_critic)
-        critic_model.embedding = cls_direct_objective.embeddings
-        return encoder_model, cls_critic, critic_model
+        critic_path = os.path.join(path, "critic.pth")
+        if from_cls :
+            encoder_model, cls_direct_objective = create_cls_models(
+                vocab_size=mcfg.vocab_size,
+                chkpt_path_encoder=encoder_path,    
+                chkpt_path_classifier=classifier_path
+            )
+            _, cls_critic = create_cls_models(
+                vocab_size=2,
+            )
+            critic_model = create_critic_model(cls_critic)
+            critic_model.embedding = cls_direct_objective.embeddings
+            return encoder_model, cls_critic, critic_model
+        else :
+            encoder_model, cls_direct_objective = create_cls_models(
+                vocab_size=2,
+                chkpt_path_encoder=encoder_path,    
+                chkpt_path_classifier=classifier_path
+            )
+            critic_model = create_critic_model(cls_direct_objective)
+            load_if_path(critic_model, chkpt_path=critic_path)
+            return encoder_model, cls_direct_objective, critic_model
+
+
     
     train_on_critic_objective(
-        create_models=init_critic_from_pretrained_cls,
+        create_models=functools.partial(init_critic_from_pretrained_cls_or_critic, from_cls=False),
         create_optimizer=create_model_optimizer,
         create_dataloaders=create_dataloaders,
         save_models=save_models,

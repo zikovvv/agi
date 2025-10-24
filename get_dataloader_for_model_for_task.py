@@ -174,7 +174,7 @@ def get_dataloaders_for_encoder_masked_modeling(
     return train_dataloader, val_dataloader
 
 def ex1 ():
-    def plot_batch_data(batch : Dict[str, torch.Tensor]) :
+    def plot_batch_data(bawwwwwwtch : Dict[str, torch.Tensor]) :
         import matplotlib.pyplot as plt
         B, L = batch['input_ids'].shape
         MAX_COLOR = 30

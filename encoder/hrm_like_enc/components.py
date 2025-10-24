@@ -49,7 +49,7 @@ def rms_norm(hidden_states: torch.Tensor, variance_epsilon: float) -> torch.Tens
 
     variance = hidden_states.square().mean(-1, keepdim=True)
     hidden_states = hidden_states * torch.rsqrt(variance + variance_epsilon)
-    return hidden_states.to(input_dtype)
+    return hidden_states.to(input_dtype)    
 
 
 # def rotate_half(x: torch.Tensor):

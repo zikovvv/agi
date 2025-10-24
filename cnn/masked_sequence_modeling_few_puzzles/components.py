@@ -275,7 +275,7 @@ class  ROPEAttentionBlock(nn.Module):
         )
         self.norm_eps = cfg.layer_norm_eps
 
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor: # type: ignore
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         # Post Norm
         # Self Attention
         log_debug(f'{hidden_states.shape = }')

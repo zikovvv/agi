@@ -18,7 +18,10 @@ def show_examples(example : List[Tuple[np.ndarray, np.ndarray]]) :
         axs[1, i].imshow(out, cmap='tab20', vmin=vmin, vmax=vmax)
         axs[1, i].set_title('Output')
     plt.show()
-    
+
+
+
+
 import random
 import wandb
 
